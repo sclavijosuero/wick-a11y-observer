@@ -22,12 +22,6 @@ const warnRunConfig = {
   onlyWarnImpacts: ['critical', 'serious'],
   runOnly: standardsTags,
 };
-const allWarnRunConfig = {
-  iframes: true,
-  includedImpacts: [],
-  onlyWarnImpacts: ['critical', 'serious', 'moderate', 'minor'],
-  runOnly: standardsTags,
-};
 
 const failWarnRunConfig = {
   iframes: true,
@@ -36,7 +30,14 @@ const failWarnRunConfig = {
   runOnly: standardsTags,
 };
 
-const allFailRunConfig = {
+const allWarnRunConfig = {
+  iframes: true,
+  includedImpacts: [],
+  onlyWarnImpacts: ['critical', 'serious', 'moderate', 'minor'],
+  runOnly: standardsTags,
+};
+
+const almostAllFailRunConfig = {
   iframes: true,
   includedImpacts: ['critical', 'serious', 'moderate'],
   onlyWarnImpacts: [],
@@ -85,8 +86,8 @@ registerLiveA11yAutoLifecycle({
 describe('live a11y auto lifecycle', () => {
   it('passes when all impacts are warning-only', () => {
     cy.setLiveA11yAutoSetupOptions({
-      initialAxeOptions: allWarnRunConfig,
-      liveAxeOptions: allWarnRunConfig,
+      initialAxeOptions: warnRunConfig,
+      liveAxeOptions: warnRunConfig,
     });
 
     cy.visit('/live-axe-monitor-playground.html');
@@ -233,8 +234,8 @@ describe('live a11y auto lifecycle', () => {
 
   it('fails this test when all four severities are included as failing impacts', () => {
     cy.setLiveA11yAutoSetupOptions({
-      initialAxeOptions: allFailRunConfig,
-      liveAxeOptions: allFailRunConfig,
+      initialAxeOptions: almostAllFailRunConfig,
+      liveAxeOptions: almostAllFailRunConfig,
     });
 
     cy.visit('/live-axe-monitor-playground.html');

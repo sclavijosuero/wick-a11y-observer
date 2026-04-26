@@ -79,11 +79,23 @@ const dispositionClass = (disposition) =>
 const dispositionLabel = (disposition) =>
   String(disposition || "").toLowerCase() === "warn" ? "DOES NOT FAIL TEST" : "FAILS TEST";
 
-const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}) => {
+const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}, impactPolicy = {}) => {
   const entry = groupedBySeverityDisposition?.[severity];
   if (entry?.sectionType === "warning") return "WARNINGS";
   if (entry?.sectionType === "violation") return "VIOLATIONS";
   if (Number(entry?.warn || 0) > 0 && Number(entry?.fail || 0) === 0) return "WARNINGS";
+  const normalizedSeverity = String(severity || "").toLowerCase();
+  const included = new Set(
+    Array.isArray(impactPolicy?.included)
+      ? impactPolicy.included.map((level) => String(level).toLowerCase())
+      : []
+  );
+  const warn = new Set(
+    Array.isArray(impactPolicy?.warn)
+      ? impactPolicy.warn.map((level) => String(level).toLowerCase())
+      : []
+  );
+  if (warn.has(normalizedSeverity) && !included.has(normalizedSeverity)) return "WARNINGS";
   return "VIOLATIONS";
 };
 
@@ -245,18 +257,17 @@ const renderNodeRows = (nodeDetails, ruleId) => {
       <div class="node-section node-section-axe node-section-bleed node-detail-block">
         ${renderFailureSummaryBlock(node.failureSummary)}
       </div>
-      ${
-  node.html
-    ? `<div class="node-section node-section-html node-section-bleed node-detail-block">
+      ${node.html
+            ? `<div class="node-section node-section-html node-section-bleed node-detail-block">
         <details class="html-snippet">
           <summary class="html-snippet-summary">Show HTML</summary>
           <pre class="code code-block-bleed">${escapeHtml(
-      node.html.length > 2000 ? `${node.html.slice(0, 2000)}…` : node.html
-    )}</pre>
+              node.html.length > 2000 ? `${node.html.slice(0, 2000)}…` : node.html
+            )}</pre>
         </details>
       </div>`
-    : ""
-}
+            : ""
+          }
     </div>
   </div>
 </details>`
@@ -270,22 +281,21 @@ const renderNodeRows = (nodeDetails, ruleId) => {
             <div class="node-section node-section-axe node-section-bleed node-detail-block">
               ${renderFailureSummaryBlock(node.failureSummary)}
             </div>
-            ${
-  node.html
-    ? `<div class="node-section node-section-html node-section-bleed node-detail-block">
+            ${node.html
+            ? `<div class="node-section node-section-html node-section-bleed node-detail-block">
               <details class="html-snippet">
                 <summary class="html-snippet-summary">Show HTML</summary>
                 <pre class="code code-block-bleed">${escapeHtml(
-      node.html.length > 2000 ? `${node.html.slice(0, 2000)}…` : node.html
-    )}</pre>
+              node.html.length > 2000 ? `${node.html.slice(0, 2000)}…` : node.html
+            )}</pre>
               </details>
             </div>`
-    : ""
-}`
+            : ""
+          }`
           : "";
         return `
     <tr class="${trClass}" id="${rowId}">
-      <td class="col-target" scope="row" valign="top">
+      <th class="col-target" scope="row" valign="top">
         <div class="node-target-label">Selector / target</div>
         <p class="node-priority-chip-wrap">
           <span class="node-priority-chip ${rowRecurrence ? "node-priority-repeated" : "node-priority-new"}">
@@ -294,7 +304,7 @@ const renderNodeRows = (nodeDetails, ruleId) => {
         </p>
         <code class="node-target-code" title="${escapeHtml(node.target)}">${escapeHtml(node.target)}</code>
         ${pageLine}
-      </td>
+      </th>
       <td class="col-node-rollup" valign="top">
         <div class="node-rollup" role="group" aria-label="Details for this row’s target">
           ${recurrenceBanner}
@@ -546,7 +556,7 @@ const renderLiveA11yReportHtml = (report) => {
   const technicalOrder = Array.isArray(summary.technicalOrder) && summary.technicalOrder.length > 0
     ? summary.technicalOrder
     : fallbackSummary.technicalOrder;
-  const technicalRows = chunkIntoRows(technicalOrder, 3)
+  const technicalRowHtml = chunkIntoRows(technicalOrder, 3)
     .map((row) => {
       const cells = row.map((metricKey) => {
         const metricHelp = summary.metricHelp?.[metricKey] || {};
@@ -576,19 +586,20 @@ const renderLiveA11yReportHtml = (report) => {
       const padCount = 3 - row.length;
       const pads = padCount > 0 ? "<td class=\"tech-cell tech-cell-empty\"></td>".repeat(padCount) : "";
       return `<tr>${cells}${pads}</tr>`;
-    })
-    .join("");
+    });
+  const technicalRowsPreview = technicalRowHtml.slice(0, 1).join("");
+  const technicalRowsExpandedRemainder = technicalRowHtml.slice(1).join("");
+  const technicalTotalRows = technicalRowHtml.length;
 
   const sevPills = severityTotalsOrder
     .map((s) => {
       const n = bySev[s] ?? 0;
-      const sectionType = severitySectionTypeLabel(s, bySevDisposition);
+      const sectionType = severitySectionTypeLabel(s, bySevDisposition, report.impactPolicy || {});
       return `<a class="sev-pill ${severityClass(s)}" href="#sev-${escapeHtml(s)}">${sectionType} - ${escapeHtml(s)}: ${n}</a>`;
     })
     .join(" ");
 
   const analysisOptions = `
-    <section class="analysis-options" aria-label="Analysis options">
       <h2>Analysis Options</h2>
       <div class="analysis-option-row">
         <span class="analysis-option-label">Rule tags used</span>
@@ -601,14 +612,13 @@ const renderLiveA11yReportHtml = (report) => {
       <div class="analysis-option-row">
         <span class="analysis-option-label">Impacts that warn only</span>
         <span class="analysis-option-values">${renderOptionPills(configuredWarnImpactLevels) || '<span class="subtle">None</span>'}</span>
-      </div>
-    </section>`;
+      </div>`;
 
   const bySeveritySections = sevOrder
     .map((sev) => {
       const list = violations.filter((v) => String(v.impact || "").toLowerCase() === sev);
       if (list.length === 0) return "";
-      const sectionType = severitySectionTypeLabel(sev, bySevDisposition);
+      const sectionType = severitySectionTypeLabel(sev, bySevDisposition, report.impactPolicy || {});
       const sectionDisposition = sectionType === "WARNINGS" ? "warn" : "fail";
       return `
   <section class="sev-block ${severityClass(sev)}-section" id="sev-${escapeHtml(sev)}" aria-labelledby="sev-${escapeHtml(sev)}-heading">
@@ -618,8 +628,8 @@ const renderLiveA11yReportHtml = (report) => {
         <h2 id="sev-${escapeHtml(sev)}-heading">
           <span class="badge ${severityClass(sev)}">${escapeHtml(sev)}</span>
           <span class="outcome-badge ${dispositionClass(sectionDisposition)}">${escapeHtml(
-    dispositionLabel(sectionDisposition)
-  )}</span>
+        dispositionLabel(sectionDisposition)
+      )}</span>
           <span>${list.length} grouped rule(s)</span>
         </h2>
       </div>
@@ -629,8 +639,8 @@ const renderLiveA11yReportHtml = (report) => {
       ${list.map(renderViolationCard).join("\n")}
     </div>
     <div class="sev-block-end" aria-hidden="true">End of ${String(sev).toUpperCase()} severity section (${escapeHtml(
-    dispositionLabel(sectionDisposition).toLowerCase()
-  )})</div>
+        dispositionLabel(sectionDisposition).toLowerCase()
+      )})</div>
   </section>`;
     })
     .join("");
@@ -658,14 +668,16 @@ const renderLiveA11yReportHtml = (report) => {
   <title>wick-a11y-observer report — ${escapeHtml(artifact.reportId || artifact.specStem || "run")}</title>
   <style>
     :root {
-      --bg: #0f1419;
-      --card: #1a222d;
-      --text: #e6edf3;
-      --muted: #8b9cad;
-      --border: #30363d;
-      --link: #58a6ff;
+      --bg: #0d131b;
+      --card: #172130;
+      --text: #f2f7ff;
+      --muted: #d2deed;
+      --border: #617891;
+      --link: #8fd1ff;
+      --focus: #ffd166;
     }
     * { box-sizing: border-box; }
+    html { font-size: 16px; }
     body {
       font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       background: var(--bg);
@@ -674,12 +686,35 @@ const renderLiveA11yReportHtml = (report) => {
       margin: 0;
       padding: 1.5rem 1.25rem 3rem;
     }
+    .skip-link {
+      position: absolute;
+      left: -9999px;
+      top: 0;
+      z-index: 10000;
+      padding: 0.55rem 0.75rem;
+      border-radius: 8px;
+      background: #fff8d6;
+      color: #101418;
+      border: 2px solid #101418;
+      font-weight: 700;
+    }
+    .skip-link:focus,
+    .skip-link:focus-visible {
+      left: 1rem;
+      top: 1rem;
+    }
     .wrap { max-width: 1200px; margin: 0 auto; }
     h1 { font-size: 1.5rem; font-weight: 600; margin: 0 0 0.5rem; }
     h2 { font-size: 1.1rem; margin: 0; font-weight: 600; }
     h3 { font-size: 1rem; margin: 0; display: inline; font-weight: 600; }
-    a { color: var(--link); }
-    .subtle { color: var(--muted); font-size: 0.9rem; }
+    a { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+    a:hover { color: #b4e0ff; }
+    :where(a, button, summary, [role="button"], [tabindex]):focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+      border-radius: 4px;
+    }
+    .subtle { color: var(--muted); font-size: 1rem; }
     .summary {
       width: 100%;
       border-collapse: collapse;
@@ -715,6 +750,38 @@ const renderLiveA11yReportHtml = (report) => {
       border-spacing: 0.5rem;
       margin: 0.35rem 0 0.65rem;
     }
+    .tech-grid-preview {
+      margin: 0.35rem 0 0.35rem;
+    }
+    .tech-expand {
+      margin: 0.2rem 0 0.65rem;
+    }
+    .tech-expand > summary {
+      cursor: pointer;
+      list-style: none;
+      color: var(--link);
+      font-size: 0.88rem;
+      font-weight: 600;
+      outline: none;
+      padding: 0.1rem 0;
+    }
+    .tech-expand > summary::-webkit-details-marker { display: none; }
+    .tech-expand > summary::before {
+      content: "▶ ";
+      font-size: 0.72rem;
+      color: var(--muted);
+    }
+    .tech-expand[open] > summary::before { content: "▼ "; }
+    .tech-expand-hint {
+      display: inline-block;
+      margin-left: 0.25rem;
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 500;
+    }
+    .tech-grid-expanded {
+      margin-top: 0.25rem;
+    }
     .tech-cell {
       width: 33.33%;
       vertical-align: top;
@@ -748,7 +815,7 @@ const renderLiveA11yReportHtml = (report) => {
     .tech-metric[open] summary::before { content: "▼"; }
     .tech-metric-label {
       color: var(--muted);
-      font-size: 0.74rem;
+      font-size: 0.88rem;
       font-weight: 600;
       line-height: 1.25;
     }
@@ -771,14 +838,6 @@ const renderLiveA11yReportHtml = (report) => {
     .tech-metric-help p {
       margin: 0.25rem 0;
     }
-    .analysis-options {
-      margin: 1rem 0 1.25rem;
-      padding: 1rem;
-      background: #111821;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-    }
-    .analysis-options h2 { font-size: 1rem; margin: 0 0 0.75rem; }
     .analysis-option-row {
       display: grid;
       grid-template-columns: minmax(9rem, 13rem) 1fr;
@@ -786,7 +845,7 @@ const renderLiveA11yReportHtml = (report) => {
       align-items: baseline;
       margin: 0.45rem 0;
     }
-    .analysis-option-label { color: var(--muted); font-size: 0.85rem; font-weight: 600; }
+    .analysis-option-label { color: var(--muted); font-size: 0.95rem; font-weight: 700; }
     .analysis-option-values { display: flex; flex-wrap: wrap; gap: 0.35rem; }
     .option-pill {
       display: inline-block;
@@ -795,23 +854,23 @@ const renderLiveA11yReportHtml = (report) => {
       border-radius: 999px;
       color: #c9d1d9;
       font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-      font-size: 0.78rem;
+      font-size: 0.9rem;
       padding: 0.12rem 0.45rem;
     }
     .severity-entry-title {
-      margin: 1.25rem 0 0.45rem;
-      padding-top: 0.8rem;
-      border-top: 1px solid var(--border);
+      margin: 2rem 0 0.75rem;
+      padding-top: 1.4rem;
+      border-top: 3px solid var(--border);
       font-size: 1rem;
       font-weight: 700;
       letter-spacing: 0.01em;
       color: #eaf2ff;
     }
     .sev-pills { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 1rem; }
-    .sev-pill { text-decoration: none; padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.85rem; font-weight: 600; }
-    .sev-critical { background: #3d1f1f; color: #f85149; }
-    .sev-serious { background: #3d2a1a; color: #d4a15f; }
-    .sev-moderate { background: #3d3518; color: #e3b341; }
+    .sev-pill { text-decoration: none; padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.95rem; font-weight: 700; }
+    .sev-critical { background: #5f0000; color: #fff0ee; }
+    .sev-serious { background: #5b2b00; color: #fff2df; }
+    .sev-moderate { background: #3d3518; color: #f3d35a; }
     .sev-minor { background: #1c2a3d; color: #79c0ff; }
     .sev-unknown { background: #2d2d2d; color: #aaa; }
     .sev-block {
@@ -833,16 +892,16 @@ const renderLiveA11yReportHtml = (report) => {
     }
     .sev-critical-section { border-color: rgba(248, 81, 73, 0.55); }
     .sev-critical-section .sev-block-header { background: linear-gradient(90deg, rgba(248, 81, 73, 0.22), rgba(248, 81, 73, 0.04)); }
-    .sev-serious-section { border-color: rgba(212, 161, 95, 0.55); }
-    .sev-serious-section .sev-block-header { background: linear-gradient(90deg, rgba(212, 161, 95, 0.22), rgba(212, 161, 95, 0.04)); }
-    .sev-moderate-section { border-color: rgba(227, 179, 65, 0.55); }
-    .sev-moderate-section .sev-block-header { background: linear-gradient(90deg, rgba(227, 179, 65, 0.2), rgba(227, 179, 65, 0.04)); }
+    .sev-serious-section { border-color: rgba(255, 166, 87, 0.55); }
+    .sev-serious-section .sev-block-header { background: linear-gradient(90deg, rgba(255, 166, 87, 0.24), rgba(255, 166, 87, 0.05)); }
+    .sev-moderate-section { border-color: rgba(243, 211, 90, 0.55); }
+    .sev-moderate-section .sev-block-header { background: linear-gradient(90deg, rgba(243, 211, 90, 0.22), rgba(243, 211, 90, 0.05)); }
     .sev-minor-section { border-color: rgba(121, 192, 255, 0.5); }
     .sev-minor-section .sev-block-header { background: linear-gradient(90deg, rgba(121, 192, 255, 0.2), rgba(121, 192, 255, 0.04)); }
     .sev-block-eyebrow {
       margin: 0 0 0.35rem;
       color: var(--muted);
-      font-size: 0.72rem;
+      font-size: 0.86rem;
       font-weight: 700;
       letter-spacing: 0.08em;
       text-transform: uppercase;
@@ -856,7 +915,7 @@ const renderLiveA11yReportHtml = (report) => {
     .sev-block-top-link {
       flex: 0 0 auto;
       color: var(--muted);
-      font-size: 0.82rem;
+      font-size: 0.92rem;
       text-decoration: none;
       padding: 0.2rem 0.45rem;
       border: 1px solid var(--border);
@@ -872,7 +931,7 @@ const renderLiveA11yReportHtml = (report) => {
       padding-top: 0.75rem;
       border-top: 1px dashed var(--border);
       color: var(--muted);
-      font-size: 0.74rem;
+      font-size: 0.88rem;
       font-weight: 700;
       letter-spacing: 0.08em;
       text-align: center;
@@ -927,13 +986,21 @@ const renderLiveA11yReportHtml = (report) => {
     }
     .help { margin: 0.5rem 0; }
     .meta { font-size: 0.9rem; color: var(--muted); }
-    .tag { display: inline-block; background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.75rem; margin: 0.1rem; }
-    .ext { font-size: 0.9rem; }
+    .tag { display: inline-block; background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.88rem; margin: 0.1rem; }
+    .ext { font-size: 1rem; }
     .nodes { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.88rem; margin: 0.75rem 0; }
     .nodes th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); padding: 0.4rem; }
     .nodes th:first-child { width: 28%; }
     .nodes th:last-child { width: 72%; }
-    .nodes td { vertical-align: top; padding: 0.5rem 0.4rem; border-bottom: 1px solid var(--border); }
+    .nodes td, .nodes th.col-target {
+      vertical-align: top;
+      padding: 0.5rem 0.4rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .nodes th.col-target {
+      text-align: left;
+      font-weight: 400;
+    }
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
     .node-group { border-left: 3px solid #30363d; }
     .node-group--recurrence { border-left-color: #a371f7; }
@@ -955,7 +1022,7 @@ const renderLiveA11yReportHtml = (report) => {
       border: 1px solid #3d2a54;
       border-radius: 6px;
     }
-    .node-recurrence-title { display: block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #d2a8ff; margin-bottom: 0.3rem; }
+    .node-recurrence-title { display: block; font-size: 0.86rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #e1c2ff; margin-bottom: 0.3rem; }
     .node-recurrence-body { margin: 0; font-size: 0.84rem; color: #c9d1d9; line-height: 1.45; }
     .node-recurrence-rid { font-size: 0.8rem; background: #0d1117; padding: 0.15rem 0.4rem; border-radius: 4px; }
     .node-recurrence-compact { margin-top: 0.3rem; }
@@ -970,7 +1037,7 @@ const renderLiveA11yReportHtml = (report) => {
     .node-recurrence-compact-summary::before { content: "▶ "; font-size: 0.7rem; color: var(--muted); }
     .node-recurrence-compact[open] .node-recurrence-compact-summary::before { content: "▼ "; }
     .node-recurrence-compact-body { margin-top: 0.4rem; }
-    .node-target-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.3rem; }
+    .node-target-label { font-size: 0.86rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.3rem; }
     .node-priority-chip-wrap { margin: 0 0 0.3rem; }
     .node-priority-chip {
       display: inline-block;
@@ -988,12 +1055,12 @@ const renderLiveA11yReportHtml = (report) => {
       border-color: rgba(86, 211, 100, 0.45);
     }
     .node-priority-repeated {
-      background: rgba(163, 113, 247, 0.2);
-      color: #d2a8ff;
-      border-color: rgba(163, 113, 247, 0.55);
+      background: #3f245f;
+      color: #f5e9ff;
+      border-color: #8f5ed8;
     }
     .node-target-code { display: block; font-size: 0.8rem; word-break: break-all; }
-    .node-page { margin: 0.4rem 0 0; font-size: 0.78rem; word-break: break-all; }
+    .node-page { margin: 0.4rem 0 0; font-size: 0.92rem; word-break: break-all; }
     .node-page a { color: var(--link); }
     .node-rollup { padding: 0; text-align: left; width: 100%; max-width: 100%; display: flex; flex-direction: column; align-items: stretch; }
     .node-detail-block { width: 100%; max-width: 100%; align-self: stretch; }
@@ -1029,32 +1096,33 @@ const renderLiveA11yReportHtml = (report) => {
     .node-fix-html-column .failure-body,
     .node-fix-html-column .code-block-bleed { width: 100%; box-sizing: border-box; }
     .sc-rule-src { display: inline; }
-    .pill { display: inline-block; background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; margin-right: 0.25rem; font-size: 0.8rem; }
+    .pill { display: inline-block; background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; margin-right: 0.25rem; font-size: 0.9rem; }
     .pill.subtle { background: transparent; color: var(--muted); }
     .node-section-bleed .failure-details, .node-section-bleed .html-snippet { width: 100%; max-width: 100%; text-align: left; }
     .failure-details { margin: 0.1rem 0 0.4rem; }
-    .failure-summary { cursor: pointer; color: var(--link); font-size: 0.9rem; list-style: none; text-align: left; padding: 0; }
+    .failure-summary { cursor: pointer; color: var(--link); font-size: 1rem; list-style: none; text-align: left; padding: 0; }
     .failure-details .failure-summary::-webkit-details-marker { display: none; }
     .failure-summary::before { content: "▶ "; font-size: 0.7rem; color: var(--muted); }
     .failure-details[open] .failure-summary::before { content: "▼ "; }
-    .failure { white-space: pre-wrap; font-size: 0.85rem; color: #c9d1d9; text-align: left; }
+    .failure { white-space: pre-wrap; font-size: 1rem; color: #dce6f5; text-align: left; }
     .failure-body { margin: 0.35rem 0 0.15rem; padding: 0.6rem 0.65rem; background: #0d1117; border-radius: 6px; border: 1px solid var(--border); width: 100%; max-width: 100%; box-sizing: border-box; }
     .failure-empty { margin: 0.25rem 0; }
     .html-snippet { margin: 0; width: 100%; max-width: 100%; }
-    .html-snippet-summary { cursor: pointer; color: var(--link); font-size: 0.9rem; text-align: left; list-style: none; padding: 0; }
+    .html-snippet-summary { cursor: pointer; color: var(--link); font-size: 1rem; text-align: left; list-style: none; padding: 0; }
     .html-snippet .html-snippet-summary::-webkit-details-marker { display: none; }
     .html-snippet .html-snippet-summary::before { content: "▶ "; font-size: 0.7rem; color: var(--muted); }
     .html-snippet[open] .html-snippet-summary::before { content: "▼ "; }
-    .code, .code-block-bleed { background: #0d1117; padding: 0.6rem 0.65rem; border-radius: 6px; overflow: auto; max-height: 280px; font-size: 0.75rem; text-align: left; width: 100%; max-width: 100%; box-sizing: border-box; }
+    .code, .code-block-bleed { background: #0d1117; padding: 0.6rem 0.65rem; border-radius: 6px; overflow: auto; max-height: 280px; font-size: 0.9rem; text-align: left; width: 100%; max-width: 100%; box-sizing: border-box; }
     .errors { margin-top: 2rem; }
     .errors ul { color: #f85149; }
     .nodata { color: var(--muted); }
-    footer { margin-top: 2rem; font-size: 0.8rem; color: var(--muted); }
+    footer { margin-top: 2rem; font-size: 0.95rem; color: var(--muted); }
     .report-footnote { margin-top: 0.75rem; }
   </style>
 </head>
 <body>
-  <div class="wrap">
+  <a href="#main-content" class="skip-link">Skip to report content</a>
+  <main class="wrap" id="main-content">
     <h1 id="top">wick-a11y-observer accessibility report</h1>
     <p class="subtle">Readable summary of grouped axe-core violations (initial + live). Open <strong>Rule docs</strong> for remediation.</p>
     <div class="summary-groups" aria-label="Top summary sections">
@@ -1065,15 +1133,26 @@ const renderLiveA11yReportHtml = (report) => {
           <tbody>${identityTable}</tbody>
         </table>
       </section>
+      <section class="summary-group summary-group-analysis" aria-label="Analysis options">
+        ${analysisOptions}
+      </section>
       <section class="summary-group summary-group-technical" aria-label="Technical metrics">
         <h2>Technical Metrics</h2>
         <p class="subtle">Click any metric card to see plain-language meaning and how it relates to others.</p>
-        <table class="tech-grid" role="table" aria-label="Technical metrics grid">
-          <tbody>${technicalRows}</tbody>
+        <table class="tech-grid tech-grid-preview" role="table" aria-label="Technical metrics preview (first row)">
+          <tbody>${technicalRowsPreview}</tbody>
         </table>
+        <details class="tech-expand">
+          <summary>
+            Show more technical metrics
+            <span class="tech-expand-hint">(${Math.max(technicalTotalRows - 1, 0)} more row(s) available)</span>
+          </summary>
+          <table class="tech-grid tech-grid-expanded" role="table" aria-label="Technical metrics additional rows">
+            <tbody>${technicalRowsExpandedRemainder || '<tr><td class="tech-cell tech-cell-empty" colspan="3">No additional rows.</td></tr>'}</tbody>
+          </table>
+        </details>
       </section>
     </div>
-    ${analysisOptions}
     <h2 class="severity-entry-title">By severity (grouped rules)</h2>
     <div class="sev-pills">${sevPills || "<span class=\"subtle\">No violations in grouped output.</span>"}</div>
     ${errorsBlock}
@@ -1082,7 +1161,7 @@ const renderLiveA11yReportHtml = (report) => {
       <p>Generated for interactive review — keep JSON for machine use.</p>
       <p class="report-footnote">${footnoteHtml}</p>
     </footer>
-  </div>
+  </main>
 </body>
 </html>`;
 };
