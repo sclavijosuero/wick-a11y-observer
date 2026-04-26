@@ -97,6 +97,9 @@ const renderNodeSourceAndCounts = (node) => {
   const labels = (node.sourceLabels && node.sourceLabels.length === sources.length
     ? node.sourceLabels
     : sources.map((s) => s));
+  const sourceOccurrenceCounts = node.sourceOccurrenceCounts && typeof node.sourceOccurrenceCounts === "object"
+    ? node.sourceOccurrenceCounts
+    : {};
 
   const initialIdx = sources.findIndex((s) => s === INITIAL_SOURCE);
   const initialLabel = initialIdx >= 0 ? labels[initialIdx] : "Initial scan (full page)";
@@ -104,6 +107,19 @@ const renderNodeSourceAndCounts = (node) => {
   const liveEntries = sources
     .map((s, i) => ({ s, label: labels[i] || s }))
     .filter((entry) => entry.s !== INITIAL_SOURCE);
+  const seenLiveLabels = new Set();
+  const uniqueLiveLabelEntries = liveEntries.reduce((acc, entry) => {
+    const key = String(entry.label || "unknown");
+    if (seenLiveLabels.has(key)) {
+      return acc;
+    }
+    seenLiveLabels.add(key);
+    acc.push({
+      label: key,
+      count: Number(sourceOccurrenceCounts[key] || 1),
+    });
+    return acc;
+  }, []);
 
   const initialBlock =
     inits > 0
@@ -114,12 +130,12 @@ const renderNodeSourceAndCounts = (node) => {
   if (liveN > 0) {
     const list =
       liveEntries.length > 0
-        ? `<ul class="sc-live-parts">${liveEntries
-          .map((e) => `<li>${escapeHtml(e.label)}</li>`)
+        ? `<ul class="sc-live-parts">${uniqueLiveLabelEntries
+          .map((e) => `<li>${escapeHtml(e.label)} <span class="sc-live-count">× ${e.count}</span></li>`)
           .join("")}</ul>`
         : `<p class="subtle sc-live-fallback">Live detections: ${liveN} (source details not split in this row)</p>`;
     // Same heading style as initial: label + sc-x count; list below lists per-root source labels.
-    liveBlock = `<div class="sc-line sc-live-block"><div class="sc-live-head"><span class="sc-what">Live scan (DOM element)</span> <span class="sc-x">× ${liveN}</span></div>${list}</div>`;
+    liveBlock = `<div class="sc-line sc-live-block"><div class="sc-live-head"><span class="sc-what">Live detections (by scan root)</span> <span class="sc-x">× ${liveN}</span></div>${list}</div>`;
   }
 
   if (!initialBlock && !liveBlock) {
@@ -271,6 +287,11 @@ const renderNodeRows = (nodeDetails, ruleId) => {
     <tr class="${trClass}" id="${rowId}">
       <td class="col-target" scope="row" valign="top">
         <div class="node-target-label">Selector / target</div>
+        <p class="node-priority-chip-wrap">
+          <span class="node-priority-chip ${rowRecurrence ? "node-priority-repeated" : "node-priority-new"}">
+            ${rowRecurrence ? "Repeated" : "New"}
+          </span>
+        </p>
         <code class="node-target-code" title="${escapeHtml(node.target)}">${escapeHtml(node.target)}</code>
         ${pageLine}
       </td>
@@ -777,7 +798,16 @@ const renderLiveA11yReportHtml = (report) => {
       font-size: 0.78rem;
       padding: 0.12rem 0.45rem;
     }
-    .sev-pills { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; }
+    .severity-entry-title {
+      margin: 1.25rem 0 0.45rem;
+      padding-top: 0.8rem;
+      border-top: 1px solid var(--border);
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      color: #eaf2ff;
+    }
+    .sev-pills { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 0.5rem 0 1rem; }
     .sev-pill { text-decoration: none; padding: 0.25rem 0.5rem; border-radius: 6px; font-size: 0.85rem; font-weight: 600; }
     .sev-critical { background: #3d1f1f; color: #f85149; }
     .sev-serious { background: #3d2a1a; color: #d4a15f; }
@@ -908,7 +938,10 @@ const renderLiveA11yReportHtml = (report) => {
     .node-group { border-left: 3px solid #30363d; }
     .node-group--recurrence { border-left-color: #a371f7; }
     .node-group td { background: #161b22; }
-    .node-group--recurrence td { background: #1c1428; }
+    .node-group--recurrence td {
+      background: #181225;
+      color: #d7c7f3;
+    }
     .node-repeat-pill { margin: 0.4rem 0 0; font-size: 0.76rem; color: #d2a8ff; }
     .node-repeat-pill-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.68rem; }
     .node-repeat-pill code { background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.75rem; color: #e6edf3; }
@@ -938,6 +971,27 @@ const renderLiveA11yReportHtml = (report) => {
     .node-recurrence-compact[open] .node-recurrence-compact-summary::before { content: "▼ "; }
     .node-recurrence-compact-body { margin-top: 0.4rem; }
     .node-target-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.3rem; }
+    .node-priority-chip-wrap { margin: 0 0 0.3rem; }
+    .node-priority-chip {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 0.08rem 0.45rem;
+      font-size: 0.66rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      border: 1px solid var(--border);
+    }
+    .node-priority-new {
+      background: rgba(58, 166, 85, 0.16);
+      color: #56d364;
+      border-color: rgba(86, 211, 100, 0.45);
+    }
+    .node-priority-repeated {
+      background: rgba(163, 113, 247, 0.2);
+      color: #d2a8ff;
+      border-color: rgba(163, 113, 247, 0.55);
+    }
     .node-target-code { display: block; font-size: 0.8rem; word-break: break-all; }
     .node-page { margin: 0.4rem 0 0; font-size: 0.78rem; word-break: break-all; }
     .node-page a { color: var(--link); }
@@ -957,6 +1011,7 @@ const renderLiveA11yReportHtml = (report) => {
     .sc-live-head { margin-bottom: 0.2rem; }
     .sc-live-parts { list-style: disc; margin: 0.2rem 0 0.15rem; padding: 0 0 0 1.4rem; text-align: left; }
     .sc-live-parts li { margin: 0.2rem 0; padding: 0 0 0 0.2rem; }
+    .sc-live-count { color: var(--muted); font-size: 0.8rem; font-weight: 600; }
     .sc-live-fallback { margin: 0.2rem 0 0 0.75rem; }
     .node-fix-html-column {
       width: 100%;
@@ -1019,7 +1074,7 @@ const renderLiveA11yReportHtml = (report) => {
       </section>
     </div>
     ${analysisOptions}
-    <p class="subtle">By severity (grouped rules)</p>
+    <h2 class="severity-entry-title">By severity (grouped rules)</h2>
     <div class="sev-pills">${sevPills || "<span class=\"subtle\">No violations in grouped output.</span>"}</div>
     ${errorsBlock}
     ${bySeveritySections || "<p class=\"subtle\">No violations to show.</p>"}

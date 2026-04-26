@@ -452,6 +452,9 @@ const groupViolations = (violationDetails) => {
           phases: [violation.phase],
           sources: [violation.source],
           sourceLabels: [violation.sourceLabel || violation.source],
+          sourceOccurrenceCounts: {
+            [violation.sourceLabel || violation.source]: 1,
+          },
           initialDetections: violation.phase === "initial" ? 1 : 0,
           liveDetections: violation.phase === "live" ? 1 : 0,
         });
@@ -466,6 +469,10 @@ const groupViolations = (violationDetails) => {
           currentNode.sources.push(violation.source);
           currentNode.sourceLabels.push(violation.sourceLabel || violation.source);
         }
+        const sourceKey = violation.sourceLabel || violation.source;
+        currentNode.sourceOccurrenceCounts = currentNode.sourceOccurrenceCounts || {};
+        currentNode.sourceOccurrenceCounts[sourceKey] =
+          (currentNode.sourceOccurrenceCounts[sourceKey] || 0) + 1;
         if (violation.phase === "initial") {
           currentNode.initialDetections = (currentNode.initialDetections || 0) + 1;
         }
