@@ -195,7 +195,13 @@ const renderNodeRows = (nodeDetails, ruleId) => {
     return "<p class=\"nodata\">No node details.</p>";
   }
   const safe = String(ruleId || "rule").replace(/[^a-zA-Z0-9_-]/g, "_");
-  return nodeDetails
+  const prioritizedNodeDetails = [...nodeDetails].sort((a, b) => {
+    const aRepeated = Boolean(a?.repeatedFromEarlierReport);
+    const bRepeated = Boolean(b?.repeatedFromEarlierReport);
+    return Number(aRepeated) - Number(bRepeated);
+  });
+
+  return prioritizedNodeDetails
     .map(
       (node, index) => {
         const rowId = `node-${safe}-${index}`;
@@ -205,40 +211,42 @@ const renderNodeRows = (nodeDetails, ruleId) => {
           )}" rel="noreferrer" target="_blank">${escapeHtml(node.pageUrl)}</a></p>`
           : "";
         const rowRecurrence = Boolean(node.repeatedFromEarlierReport);
-        const rid = node.firstReportId ? String(node.firstReportId) : "";
         const recurrenceBanner = rowRecurrence
           ? `<aside class="node-recurrence" role="note" aria-label="Cross-test recurrence">
-  <span class="node-recurrence-title">Same finding in an earlier report (this spec)</span>
-  <p class="node-recurrence-body">${
-  rid
-    ? `First captured under report ID <code class="node-recurrence-rid">${escapeHtml(rid)}</code>.`
-    : "This row matches a rule+target+page URL seen in a prior <code>reportLiveA11yResults</code> in this file."
-} This is the same logical finding — not a new unique node for triage count.</p>
+  <span class="node-recurrence-title">Same finding in an earlier report (this spec) — lower triage priority</span>
 </aside>`
           : "";
         const trClass = `node-group${rowRecurrence ? " node-group--recurrence" : ""}`;
-        return `
-    <tr class="${trClass}" id="${rowId}">
-      <td class="col-target" scope="row" valign="top">
-        <div class="node-target-label">Selector / target</div>
-        <code class="node-target-code" title="${escapeHtml(node.target)}">${escapeHtml(node.target)}</code>
-        ${pageLine}
-        ${
-  rowRecurrence
-    ? `<p class="node-repeat-pill" title="Recurrence from an earlier report in the same spec file">
-  <span class="node-repeat-pill-label">Recurrence</span>${
-  rid
-    ? ` · first report <code>${escapeHtml(rid)}</code>`
-    : " · see banner →"
-}
-</p>`
+        const recurrenceCompactBlock = rowRecurrence
+          ? `<details class="node-recurrence-compact">
+  <summary class="node-recurrence-compact-summary">Show recurring finding details</summary>
+  <div class="node-recurrence-compact-body">
+    <div class="node-section node-section-counts node-detail-block">
+      <div class="node-section-eyebrow">Scans</div>
+      ${renderNodeSourceAndCounts(node)}
+    </div>
+    <div class="node-fix-html-column" role="group" aria-label="Fix guidance and source HTML">
+      <div class="node-section node-section-axe node-section-bleed node-detail-block">
+        ${renderFailureSummaryBlock(node.failureSummary)}
+      </div>
+      ${
+  node.html
+    ? `<div class="node-section node-section-html node-section-bleed node-detail-block">
+        <details class="html-snippet">
+          <summary class="html-snippet-summary">Show HTML</summary>
+          <pre class="code code-block-bleed">${escapeHtml(
+      node.html.length > 2000 ? `${node.html.slice(0, 2000)}…` : node.html
+    )}</pre>
+        </details>
+      </div>`
     : ""
 }
-      </td>
-      <td class="col-node-rollup" valign="top">
-        <div class="node-rollup" role="group" aria-label="Details for this row’s target">
-          ${recurrenceBanner}
-          <div class="node-section node-section-counts node-detail-block">
+    </div>
+  </div>
+</details>`
+          : "";
+        const standardBlock = !rowRecurrence
+          ? `<div class="node-section node-section-counts node-detail-block">
             <div class="node-section-eyebrow">Scans</div>
             ${renderNodeSourceAndCounts(node)}
           </div>
@@ -257,8 +265,20 @@ const renderNodeRows = (nodeDetails, ruleId) => {
               </details>
             </div>`
     : ""
-}
-          </div>
+}`
+          : "";
+        return `
+    <tr class="${trClass}" id="${rowId}">
+      <td class="col-target" scope="row" valign="top">
+        <div class="node-target-label">Selector / target</div>
+        <code class="node-target-code" title="${escapeHtml(node.target)}">${escapeHtml(node.target)}</code>
+        ${pageLine}
+      </td>
+      <td class="col-node-rollup" valign="top">
+        <div class="node-rollup" role="group" aria-label="Details for this row’s target">
+          ${recurrenceBanner}
+          ${standardBlock}
+          ${recurrenceCompactBlock}
         </div>
       </td>
     </tr>`;
@@ -905,6 +925,18 @@ const renderLiveA11yReportHtml = (report) => {
     .node-recurrence-title { display: block; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #d2a8ff; margin-bottom: 0.3rem; }
     .node-recurrence-body { margin: 0; font-size: 0.84rem; color: #c9d1d9; line-height: 1.45; }
     .node-recurrence-rid { font-size: 0.8rem; background: #0d1117; padding: 0.15rem 0.4rem; border-radius: 4px; }
+    .node-recurrence-compact { margin-top: 0.3rem; }
+    .node-recurrence-compact-summary {
+      cursor: pointer;
+      color: var(--link);
+      font-size: 0.85rem;
+      list-style: none;
+      padding: 0;
+    }
+    .node-recurrence-compact .node-recurrence-compact-summary::-webkit-details-marker { display: none; }
+    .node-recurrence-compact-summary::before { content: "▶ "; font-size: 0.7rem; color: var(--muted); }
+    .node-recurrence-compact[open] .node-recurrence-compact-summary::before { content: "▼ "; }
+    .node-recurrence-compact-body { margin-top: 0.4rem; }
     .node-target-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 0.3rem; }
     .node-target-code { display: block; font-size: 0.8rem; word-break: break-all; }
     .node-page { margin: 0.4rem 0 0; font-size: 0.78rem; word-break: break-all; }

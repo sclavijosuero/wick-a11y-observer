@@ -6,16 +6,183 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Live Axe Secondary</title>
   <style>
+    :root {
+      --bg: #f7f3ec;
+      --ink: #2d2a26;
+      --panel: #ffffff;
+    }
+
     body {
-      font-family: Arial, sans-serif;
-      margin: 24px;
+      margin: 0;
+      font-family: "Trebuchet MS", Arial, sans-serif;
+      color: var(--ink);
+      background: radial-gradient(circle at top right, #ffe8be 0%, var(--bg) 55%);
+    }
+
+    main {
+      max-width: 940px;
+      margin: 0 auto;
+      padding: 1.25rem;
+    }
+
+    .hero {
+      border: 1px solid #d9c8a2;
+      background: linear-gradient(180deg, #fff7df 0%, #fff 100%);
+      padding: 0.95rem 1rem;
+      border-radius: 12px;
+      margin-bottom: 1rem;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      margin-bottom: 0.9rem;
+    }
+
+    button {
+      border: 1px solid #ccb37c;
+      border-radius: 8px;
+      background: #fff4d7;
+      color: #4d4032;
+      cursor: pointer;
+      padding: 0.45rem 0.75rem;
+    }
+
+    .bad-focus:focus {
+      outline: none;
+    }
+
+    .panel {
+      border: 1px solid #ddd1bb;
+      background: var(--panel);
+      border-radius: 10px;
+      padding: 0.9rem;
+      margin: 0.75rem 0;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .bad-contrast {
+      color: #d2cbbf;
+      background: #f5f1e8;
+      padding: 0.35rem;
+      border-radius: 6px;
+    }
+
+    .lmenu {
+      border: 1px solid #d3c4a7;
+      background: #fff;
+      border-radius: 10px;
+      padding: 0.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      width: 230px;
+    }
+
+    .ltoast {
+      border: 1px solid #d6bf93;
+      border-radius: 8px;
+      background: #fffdf8;
+      padding: 0.6rem;
+      margin-top: 0.65rem;
     }
   </style>
 </head>
 
 <body>
-  <h1 data-cy="second-page-title">Live Axe secondary page</h1>
-  <p>Minimal page for cross-navigation during live axe monitor tests.</p>
+  <main>
+    <header class="hero">
+      <h1 data-cy="second-page-title">Live Axe Secondary Page</h1>
+      <p>This page intentionally differs from the playground to validate cross-page selector identity.</p>
+      <button type="button" data-cy="back-to-primary" onclick="window.location.href='/live-axe-monitor-playground.html'">
+        Back to primary page
+      </button>
+    </header>
+
+    <section class="toolbar" aria-label="Secondary interactions">
+      <button type="button" data-cy="open-menu">Open secondary menu</button>
+      <button type="button" data-cy="reveal-existing-issues">Reveal existing issues</button>
+      <button type="button" data-cy="show-brief">Show brief alert</button>
+      <button type="button" data-cy="inject-secondary-extra-issues">Inject secondary extra issues</button>
+    </section>
+
+    <section id="dynamic-root"></section>
+
+    <section id="existing-issues-panel" class="panel hidden" data-cy="existing-issues-panel" aria-hidden="true">
+      <h2>Secondary pre-rendered issue panel</h2>
+      <p class="bad-contrast">Low contrast helper text on secondary page.</p>
+      <button type="button" data-cy="shared-empty-button"></button>
+      <a href="#secondary-empty-link" data-cy="shared-empty-link"></a>
+      <input type="text" aria-label="" placeholder="Missing accessible name">
+      <div role="switch">Secondary switch without state</div>
+      <iframe
+        title="Secondary embedded frame"
+        srcdoc="<button type='button'></button><a href='#'></a>"></iframe>
+    </section>
+
+    <section id="secondary-extra-issues-panel" class="panel hidden" data-cy="secondary-extra-issues-panel" aria-hidden="true">
+      <h2>Secondary extra issue panel</h2>
+      <label>Email</label>
+      <input type="email" aria-label="" placeholder="Email">
+      <button type="button"></button>
+      <div role="switch">Notifications</div>
+    </section>
+  </main>
+
+  <script>
+    const dynamicRoot = document.getElementById("dynamic-root");
+    const panel = document.getElementById("existing-issues-panel");
+
+    document.querySelector('[data-cy="reveal-existing-issues"]').addEventListener("click", () => {
+      panel.classList.remove("hidden");
+      panel.setAttribute("aria-hidden", "false");
+    });
+
+    document.querySelector('[data-cy="show-brief"]').addEventListener("click", () => {
+      const alertEl = document.createElement("div");
+      alertEl.className = "panel";
+      alertEl.setAttribute("data-cy", "brief-alert");
+      alertEl.setAttribute("role", "alert");
+      alertEl.innerHTML = `<p class="bad-contrast">Secondary short-lived alert.</p><button type="button"></button>`;
+      dynamicRoot.appendChild(alertEl);
+      setTimeout(() => alertEl.remove(), 1300);
+    });
+
+    document.querySelector('[data-cy="open-menu"]').addEventListener("click", () => {
+      dynamicRoot.querySelectorAll(".lmenu").forEach((node) => node.remove());
+      const menu = document.createElement("div");
+      menu.className = "lmenu";
+      menu.setAttribute("data-cy", "main-menu");
+      menu.setAttribute("role", "menu");
+      menu.innerHTML = `
+        <button data-cy="menu-item-view-profile" role="menuitem">View profile</button>
+        <button data-cy="menu-item-log-out" role="menuitem" class="bad-focus">Log out</button>
+      `;
+      dynamicRoot.appendChild(menu);
+    });
+
+    document.querySelector('[data-cy="inject-secondary-extra-issues"]').addEventListener("click", () => {
+      const extraPanel = document.getElementById("secondary-extra-issues-panel");
+      extraPanel.classList.remove("hidden");
+      extraPanel.setAttribute("aria-hidden", "false");
+    });
+
+    dynamicRoot.addEventListener("click", (event) => {
+      const menuItem = event.target.closest('[data-cy="menu-item-log-out"]');
+      if (!menuItem) return;
+
+      const toast = document.createElement("div");
+      toast.className = "ltoast";
+      toast.setAttribute("data-cy", "menu-selection-toast");
+      toast.innerHTML = `<p class="bad-contrast">Secondary selection: Log out</p><button type="button"></button>`;
+      dynamicRoot.appendChild(toast);
+      setTimeout(() => toast.remove(), 2000);
+    });
+  </script>
 </body>
 
 </html>

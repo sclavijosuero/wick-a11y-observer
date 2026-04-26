@@ -43,6 +43,30 @@ const allFailRunConfig = {
   runOnly: standardsTags,
 };
 
+const goToSecondaryPageFromPrimaryButton = () => {
+  cy.get('[data-cy=go-secondary-page]').should('be.visible').click();
+  cy.get('[data-cy=second-page-title]').should('be.visible');
+};
+
+const runSharedSecondaryPageFlow = () => {
+  cy.get('[data-cy=reveal-existing-issues]').click();
+  cy.get('[data-cy=existing-issues-panel]').should('be.visible');
+  cy.get('[data-cy=open-menu]').click();
+  cy.get('[data-cy=main-menu]').should('be.visible');
+  cy.get('[data-cy=menu-item-log-out]').click();
+  cy.get('[data-cy=menu-selection-toast]').should('be.visible');
+};
+
+const runTest1SecondaryOnlyFlow = () => {
+  cy.get('[data-cy=show-brief]').click();
+  cy.get('[data-cy=brief-alert]').should('be.visible');
+};
+
+const runTest3SecondaryOnlyFlow = () => {
+  cy.get('[data-cy=inject-secondary-extra-issues]').click();
+  cy.get('[data-cy=secondary-extra-issues-panel]').should('be.visible');
+};
+
 
 registerLiveA11yAutoLifecycle({
   setupOptions: {
@@ -95,16 +119,10 @@ describe('live a11y auto lifecycle', () => {
     cy.get('[data-cy=reveal-existing-issues]').click();
     cy.get('[data-cy=existing-issues-panel]').should('be.visible');
 
-    // Open and close drawer near the end because it can cover right-side controls.
-    cy.get('[data-cy=open-drawer]').click();
-    cy.get('[data-cy="drawer"][data-state="open"]').should('be.visible');
-    cy.get('[data-cy="drawer-save"]').click();
-
-    // Keep dialog last because it intentionally creates a fullscreen backdrop.
-    cy.get('[data-cy=open-dialog]').click();
-    cy.get('[data-cy="dialog-backdrop"][data-state="open"]').should('be.visible');
-    cy.get('[data-cy="dialog-input"]').type('Hello');
-    cy.get('[data-cy="dialog-continue"]').click();
+    // Navigate to secondary page through primary-page button and interact there.
+    goToSecondaryPageFromPrimaryButton();
+    runSharedSecondaryPageFlow();
+    runTest1SecondaryOnlyFlow();
 
   });
 
@@ -136,6 +154,13 @@ describe('live a11y auto lifecycle', () => {
     // Reveal pre-existing disclosure content.
     cy.get('[data-cy=toggle-details]').click();
     cy.get('[data-cy="faq-details"]').should('have.prop', 'open', true);
+
+    // Align primary-page timing with test #1 before navigating away.
+    cy.get('[data-cy=show-toast]').click();
+    cy.get('[data-cy="standard-toast"]').should('be.visible');
+
+    cy.get('[data-cy=add-hidden-then-show]').click();
+    cy.get('[data-cy="late-form-title"]').should('be.visible');
 
     // Reveal heavy pre-rendered issues so this flow also spans all severities.
     cy.get('[data-cy=reveal-existing-issues]').click();
@@ -197,6 +222,12 @@ describe('live a11y auto lifecycle', () => {
     // Reveal heavy pre-rendered issues so this flow also spans all severities.
     cy.get('[data-cy=reveal-existing-issues]').click();
     cy.get('[data-cy=existing-issues-panel]').should('be.visible');
+
+    // Navigate to secondary page through primary-page button.
+    // Reuse some violating interactions from test #1 plus unique ones.
+    goToSecondaryPageFromPrimaryButton();
+    runSharedSecondaryPageFlow();
+    runTest3SecondaryOnlyFlow();
 
   });
 

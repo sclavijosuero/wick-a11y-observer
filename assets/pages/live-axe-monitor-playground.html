@@ -194,6 +194,9 @@
     <button id="inject-second-only-issues-btn" data-cy="inject-second-only-issues">
       Inject second-test-only issues
     </button>
+    <button id="go-secondary-page-btn" data-cy="go-secondary-page">
+      Go to secondary page
+    </button>
   </div>
   <div class="panel">
     <h2>Static content</h2>
@@ -227,7 +230,7 @@
 
     <h3>Critical candidates</h3>
     <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="24" height="24" />
-    <button type="button">Action</button>
+    <button type="button" data-cy="shared-empty-button"></button>
     <input type="text" placeholder="Unlabeled profile field" />
     <div role="checkbox">Receive updates</div>
     <div role="menuitem">Detached menu item</div>
@@ -236,7 +239,7 @@
     <div role="radio">Detached radio without aria-checked</div>
 
     <h3>Serious candidates</h3>
-    <a href="#missing-link-name"></a>
+    <a href="#missing-link-name" data-cy="shared-empty-link"></a>
     <iframe title="Preview frame"
       srcdoc="<button type='button'></button><div role='switch'>Embedded switch</div>"></iframe>
     <ul>
@@ -502,6 +505,11 @@
         panel.setAttribute("data-state", "open");
         panel.innerHTML = ` <h2>Second test only issues</h2> <button type="button"></button> <iframe title="Second test embedded frame" srcdoc="<input type='text'><button type='button'></button>"></iframe> `;
         dynamicRoot.appendChild(panel);
+      });
+    document
+      .getElementById("go-secondary-page-btn")
+      .addEventListener("click", () => {
+        window.location.href = "/live-axe-secondary.html";
       });
     window.addEventListener("load", () => {
       for (let i = 0; i < 5; i += 1) {

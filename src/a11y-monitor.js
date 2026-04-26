@@ -247,6 +247,13 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
       enabled: true,
       throttleMs: 1500,
     },
+    preNavigationFlush: {
+      enabled: false,
+      minIntervalMs: 300,
+      triggerOnClick: true,
+      triggerOnSubmit: true,
+      triggerOnPageHide: true,
+    },
 
     initialAxeOptions: {
       resultTypes: ['violations', 'incomplete'],
@@ -258,6 +265,14 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     sharedStore: null,
 
     ...userOptions,
+    preNavigationFlush: {
+      enabled: false,
+      minIntervalMs: 300,
+      triggerOnClick: true,
+      triggerOnSubmit: true,
+      triggerOnPageHide: true,
+      ...(userOptions.preNavigationFlush || {}),
+    },
   };
 
   const store = options.sharedStore || createDefaultStore();
@@ -321,6 +336,8 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
   let nextRootId = 1;
   let fallbackRunning = false;
   let lastFallbackScanAt = 0;
+  let preNavigationFlushRunning = false;
+  let lastPreNavigationFlushAt = 0;
   const pendingMutationCandidates = new Set();
   let axeRunChain = Promise.resolve();
 
@@ -1032,6 +1049,84 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  function queuePreNavigationFlush(reason = 'navigation') {
+    if (stopped || !armed || !options.preNavigationFlush?.enabled) return;
+    if (preNavigationFlushRunning) return;
+
+    const now = win.performance.now();
+    const minIntervalMs = Number(options.preNavigationFlush?.minIntervalMs || 300);
+    if (now - lastPreNavigationFlushAt < minIntervalMs) return;
+    lastPreNavigationFlushAt = now;
+    preNavigationFlushRunning = true;
+
+    activeScans += 1;
+    store.meta.started += 1;
+    touch();
+
+    runA11ySerial(doc, options.liveAxeOptions)
+      .then((results) => {
+        store.live.push({
+          rootId: 'document',
+          rootType: 'pre-navigation-full-page',
+          rootHtmlId: null,
+          reason: `${reason}:pre-navigation`,
+          url: win.location.href,
+          timestamp: Date.now(),
+          htmlSnippet: doc.documentElement.outerHTML.slice(0, options.htmlSnippetMax),
+          results: compactA11yResults(results),
+        });
+      })
+      .catch((error) => {
+        store.errors.push({
+          url: win.location.href,
+          timestamp: Date.now(),
+          phase: 'live-scan',
+          reason: `${reason}:pre-navigation`,
+          message: error?.message || String(error),
+        });
+      })
+      .finally(() => {
+        preNavigationFlushRunning = false;
+        activeScans = Math.max(0, activeScans - 1);
+        store.meta.finished += 1;
+        touch();
+      });
+  }
+
+  function isLikelyNavigationClickTarget(target) {
+    if (!target) return false;
+    const base = isElement(target) ? target : target.parentElement;
+    if (!base || typeof base.closest !== 'function') return false;
+    const clickable = base.closest('a[href], button, input[type="submit"], input[type="image"], [role="link"]');
+    if (!clickable) return false;
+
+    if (clickable.matches('a[href]')) {
+      const href = String(clickable.getAttribute('href') || '').trim().toLowerCase();
+      return href !== '' && !href.startsWith('#') && !href.startsWith('javascript:');
+    }
+
+    if (clickable.matches('[role="link"], input[type="submit"], input[type="image"]')) {
+      return true;
+    }
+
+    if (clickable.matches('button')) {
+      if (clickable.form) return true;
+      const onclick = String(clickable.getAttribute('onclick') || '').toLowerCase();
+      if (
+        onclick.includes('location') ||
+        onclick.includes('href') ||
+        onclick.includes('assign(') ||
+        onclick.includes('replace(')
+      ) {
+        return true;
+      }
+      const hint = `${clickable.id || ''} ${clickable.getAttribute('data-cy') || ''} ${clickable.getAttribute('data-testid') || ''}`.toLowerCase();
+      return /(navigate|nav|redirect|go-|to-page|page-)/.test(hint);
+    }
+
+    return false;
+  }
+
   function queueMutationCandidate(node) {
     if (!node) return;
     if (isElement(node)) {
@@ -1143,6 +1238,37 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     win.addEventListener(name, handler, true);
   });
 
+  const preNavigationHandlers = [
+    [
+      'click',
+      (event) => {
+        if (!options.preNavigationFlush?.triggerOnClick) return;
+        if (!isLikelyNavigationClickTarget(event?.target)) return;
+        queuePreNavigationFlush('click-navigation-intent');
+      },
+    ],
+    [
+      'submit',
+      () => {
+        if (!options.preNavigationFlush?.triggerOnSubmit) return;
+        queuePreNavigationFlush('submit-navigation-intent');
+      },
+    ],
+    [
+      'pagehide',
+      () => {
+        if (!options.preNavigationFlush?.triggerOnPageHide) return;
+        queuePreNavigationFlush('pagehide');
+      },
+    ],
+  ];
+
+  if (options.preNavigationFlush?.enabled) {
+    preNavigationHandlers.forEach(([name, handler]) => {
+      win.addEventListener(name, handler, true);
+    });
+  }
+
   const loadHandler = () => scheduleRescan('resource-load');
   doc.addEventListener('load', loadHandler, true);
 
@@ -1213,6 +1339,9 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     doc.removeEventListener('load', loadHandler, true);
 
     eventHandlers.forEach(([name, handler]) => {
+      win.removeEventListener(name, handler, true);
+    });
+    preNavigationHandlers.forEach(([name, handler]) => {
       win.removeEventListener(name, handler, true);
     });
   }

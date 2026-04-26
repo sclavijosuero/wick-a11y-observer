@@ -1,8 +1,9 @@
-import { attachLiveA11yMonitor, createLiveA11yStore } from './a11y-setup';
+import { attachLiveA11yMonitor, createLiveA11yStore, installLiveA11yMonitorOnWindow } from './a11y-setup';
 
 const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = 'cypress/accessibility';
 const LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY = '__liveA11yAutoReportOptions';
 const LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY = '__liveA11yAutoSetupOptions';
+const LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY = '__liveA11yAutoActiveStore';
 
 /**
  * @param {string} p
@@ -1034,46 +1035,72 @@ const logLiveA11yValidationMarker = ({
   });
 };
 
-let isLiveA11yVisitOverwriteInstalled = false;
+let isLiveA11yAutoNavigationHookInstalled = false;
+const AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP = {
+  observerOptions: {
+    minVisibleMs: 0,
+    stableFrames: 1,
+    maxSettleMs: 300,
+  },
+};
 
-const ensureLiveA11yVisitOverwrite = ({ setupOptions, initialScan }) => {
-  if (isLiveA11yVisitOverwriteInstalled) {
+const ensureLiveA11yAutoNavigationHook = ({ setupOptions, initialScan }) => {
+  if (isLiveA11yAutoNavigationHookInstalled) {
     return;
   }
-  Cypress.Commands.overwrite('visit', (originalFn, ...args) => {
-    const store = createLiveA11yStore();
+
+  Cypress.on('window:before:load', (win) => {
+    const store = Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY);
+    if (!store) {
+      return;
+    }
+
     const resolvedCommandOptions = initialScan?.commandOptions || {
       armAfter: false,
       armOptions: { scanCurrent: false },
     };
     const runtimeSetupOptions = Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY) || {};
-    const mergedSetupOptions = mergeLiveA11ySetupOptions(setupOptions, runtimeSetupOptions);
+    const setupWithAutoPreNavFlush = mergeLiveA11ySetupOptions(
+      AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP,
+      setupOptions
+    );
+    const mergedSetupOptions = mergeLiveA11ySetupOptions(
+      setupWithAutoPreNavFlush,
+      runtimeSetupOptions
+    );
     const resolvedSetupOptions = resolveLiveA11yMonitorInstallOptions(mergedSetupOptions);
+    installLiveA11yMonitorOnWindow(win, store, resolvedSetupOptions);
 
-    attachLiveA11yMonitor(store, resolvedSetupOptions);
-    return originalFn(...args).then(async (win) => {
-      if (!win.__liveA11yMonitor) {
-        throw new Error('Live a11y monitor is not installed on window. Call cy.setupLiveA11yMonitor() before running scans.');
+    win.addEventListener('load', () => {
+      const monitor = win.__liveA11yMonitor;
+      if (!monitor) {
+        return;
       }
-
-      await win.__liveA11yMonitor.runInitialFullPageScan(initialScan?.axeOptions);
-
-      if (resolvedCommandOptions?.armAfter) {
-        win.__liveA11yMonitor.arm(
-          resolvedCommandOptions.armOptions || { scanCurrent: false }
-        );
-      }
-
-      return win;
+      monitor
+        .runInitialFullPageScan(initialScan?.axeOptions)
+        .then(() => {
+          if (resolvedCommandOptions?.armAfter) {
+            monitor.arm(resolvedCommandOptions.armOptions || { scanCurrent: false });
+          }
+        })
+        .catch((error) => {
+          monitor.store?.errors?.push({
+            url: win.location.href,
+            timestamp: Date.now(),
+            phase: 'initial-scan',
+            reason: 'auto-navigation-load',
+            message: error?.message || String(error),
+          });
+        });
     });
   });
-  isLiveA11yVisitOverwriteInstalled = true;
+  isLiveA11yAutoNavigationHookInstalled = true;
 };
 
 /**
  * Registers global hooks once (from cypress/support/e2e.js) for low-instrumentation
- * live a11y checks. It also patches cy.visit() so initial scan + arm happens after
- * each navigation.
+ * live a11y checks. It hooks each page load so initial scan + arm happens for
+ * cy.visit() and click-driven full navigations alike.
  * @param {object} [options]
  */
 export const registerLiveA11yAutoLifecycle = (options = {}) => {
@@ -1093,7 +1120,11 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
   } = options;
   const pendingValidationFailuresByTest = new Map();
 
-  ensureLiveA11yVisitOverwrite({ setupOptions, initialScan });
+  ensureLiveA11yAutoNavigationHook({ setupOptions, initialScan });
+
+  beforeEach(() => {
+    Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY, createLiveA11yStore());
+  });
 
   afterEach(function liveA11yAutoAfterEach() {
     const titlePath = typeof this.currentTest?.titlePath === 'function'
@@ -1176,6 +1207,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     if (stopMonitorAfterEach) {
       cy.stopLiveA11yMonitor();
     }
+    Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY, undefined);
   });
 
   after(() => {

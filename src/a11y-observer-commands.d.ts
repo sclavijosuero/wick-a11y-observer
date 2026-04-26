@@ -37,6 +37,13 @@ export interface LiveA11yMonitorOptions {
     enabled?: boolean;
     throttleMs?: number;
   };
+  preNavigationFlush?: {
+    enabled?: boolean;
+    minIntervalMs?: number;
+    triggerOnClick?: boolean;
+    triggerOnSubmit?: boolean;
+    triggerOnPageHide?: boolean;
+  };
   initialAxeOptions?: LiveA11yRunOptions;
   liveAxeOptions?: LiveA11yRunOptions;
   [option: string]: unknown;
