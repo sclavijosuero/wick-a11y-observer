@@ -73,6 +73,20 @@ const severityClass = (impact) => {
   return "sev-unknown";
 };
 
+const dispositionClass = (disposition) =>
+  String(disposition || "").toLowerCase() === "warn" ? "disp-warn" : "disp-fail";
+
+const dispositionLabel = (disposition) =>
+  String(disposition || "").toLowerCase() === "warn" ? "DOES NOT FAIL TEST" : "FAILS TEST";
+
+const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}) => {
+  const entry = groupedBySeverityDisposition?.[severity];
+  if (entry?.sectionType === "warning") return "WARNINGS";
+  if (entry?.sectionType === "violation") return "VIOLATIONS";
+  if (Number(entry?.warn || 0) > 0 && Number(entry?.fail || 0) === 0) return "WARNINGS";
+  return "VIOLATIONS";
+};
+
 const INITIAL_SOURCE = "full-page";
 
 /** Pairs counts with the same human labels used in the JSON (`source` + `sourceLabel`). */
@@ -274,6 +288,37 @@ const renderViolationCard = (v) => {
   </article>`;
 };
 
+const chunkIntoRows = (items = [], rowSize = 3) => {
+  const rows = [];
+  for (let i = 0; i < items.length; i += rowSize) {
+    rows.push(items.slice(i, i + rowSize));
+  }
+  return rows;
+};
+
+const buildFallbackDuplicateStats = (groupedViolations = []) => {
+  const duplicateGroupedViolationKeys = new Set();
+  const duplicateNodeKeys = new Set();
+
+  (Array.isArray(groupedViolations) ? groupedViolations : []).forEach((violation) => {
+    const ruleId = String(violation?.id || "<unknown-rule>");
+    (Array.isArray(violation?.nodeDetails) ? violation.nodeDetails : []).forEach((node) => {
+      if (!node?.repeatedFromEarlierReport) {
+        return;
+      }
+      const page = String(node?.pageUrl || "");
+      const target = String(node?.rawTarget || node?.target || "<unknown>");
+      duplicateNodeKeys.add(`${target}@@${page}`);
+      duplicateGroupedViolationKeys.add(`${ruleId}@@${page}`);
+    });
+  });
+
+  return {
+    duplicatedViolationsFromEarlierReports: duplicateGroupedViolationKeys.size,
+    duplicatedNodesFromEarlierReports: duplicateNodeKeys.size,
+  };
+};
+
 /**
  * @param {object} report
  */
@@ -281,6 +326,7 @@ const renderLiveA11yReportHtml = (report) => {
   const counts = report.counts || {};
   const artifact = report.reportArtifact || {};
   const bySev = counts.groupedBySeverity || {};
+  const bySevDisposition = counts.groupedBySeverityDisposition || {};
   const sevOrder = report.severityOrder || ["critical", "serious", "moderate", "minor"];
   const violations = report.groupedViolations || [];
   const monitorMeta = report.meta || {};
@@ -295,6 +341,16 @@ const renderLiveA11yReportHtml = (report) => {
     analysisMeta.initialImpactLevels,
     analysisMeta.liveImpactLevels
   );
+  const configuredIncludedImpactLevels = uniqueStringValues(
+    analysisMeta.configuredIncludedImpactLevels,
+    analysisMeta.initialImpactLevels,
+    analysisMeta.liveImpactLevels
+  );
+  const configuredWarnImpactLevels = uniqueStringValues(
+    analysisMeta.configuredWarnImpactLevels,
+    analysisMeta.initialWarnImpactLevels,
+    analysisMeta.liveWarnImpactLevels
+  ).filter((level) => !configuredIncludedImpactLevels.includes(level));
   const severityTotalsOrder = configuredImpactLevels.length > 0 ? configuredImpactLevels : sevOrder;
   const testInSuiteLabel = artifact.testOrdinalLabel || (artifact.testOrdinalInSuite
     ? `Test ${artifact.testOrdinalInSuite} of ${artifact.testCountInSuite} in current suite`
@@ -303,34 +359,190 @@ const renderLiveA11yReportHtml = (report) => {
   const testAndReportLabel = reportSuffix
     ? `${testInSuiteLabel} (${reportSuffix})`
     : testInSuiteLabel;
-
-  const summaryRows = [
-    ["Report ID", escapeHtml(artifact.reportId || "—")],
-    ["Spec file", escapeHtml(artifact.specFile || "—")],
-    ["Cypress test", escapeHtml(artifact.testTitle || "—")],
-    ["Test in suite", escapeHtml(testAndReportLabel)],
-    ["Local time (browser would vary)", formatIsoLocal(report.generatedAt)],
-    ["Report file (JSON)", escapeHtml(artifact.fileName || "—")],
-    ["Initial full-page violations (raw)", String(counts.initialViolations ?? "—")],
-    ["Initial distinct nodes w/ issues", String(counts.initialNodesWithViolations ?? "—")],
-    ["Live scans captured", String(counts.liveScans ?? "—")],
-    ["Unique live rule IDs (approx.)", String(counts.liveViolations ?? "—")],
-    ["Grouped rules (after merge)", String(counts.groupedViolations ?? "—")],
-    ["Monitor: started / finished", `${monitorMeta.started ?? "—"} / ${monitorMeta.finished ?? "—"}`],
-    ["Rescans / dropped", `${monitorMeta.rescans ?? "—"} / ${monitorMeta.dropped ?? "—"}`],
+  const duplicateStats = buildFallbackDuplicateStats(violations);
+  const reportEmissionInSpec = Number(artifact.reportEmissionInSpec || 0);
+  const fallbackSummary = {
+    identity: {
+      reportId: artifact.reportId || "—",
+      specFile: artifact.specFile || "—",
+      cypressTest: artifact.testTitle || "—",
+      testInSuite: testAndReportLabel,
+      generatedLocal: formatIsoLocal(report.generatedAt),
+      reportFileJson: artifact.fileName || "—",
+    },
+    technicalOrder: [
+      "initialViolationsRaw",
+      "liveDistinctViolationInstancesExcludingInitial",
+      "totalViolationsInitialPlusLiveDistinct",
+      "initialDistinctNodesWithIssues",
+      "liveDistinctNodesWithIssuesExcludingInitial",
+      "totalNodesInitialPlusLiveDistinct",
+      "liveScansCaptured",
+      "monitorDroppedScans",
+      "monitorErrors",
+      "duplicatedViolationsFromEarlierReports",
+      "duplicatedNodesFromEarlierReports",
+      "previousReportsInSpec",
+    ],
+    technicalMetrics: {
+      initialViolationsRaw: Number(counts.initialViolations ?? 0),
+      liveDistinctViolationInstancesExcludingInitial: Number(
+        counts.liveDistinctViolationInstancesExcludingInitial ?? 0
+      ),
+      totalViolationsInitialPlusLiveDistinct: Number(
+        counts.totalViolationsInitialPlusLiveDistinct ?? (
+          Number(counts.initialViolations ?? 0) +
+          Number(counts.liveDistinctViolationInstancesExcludingInitial ?? 0)
+        )
+      ),
+      initialDistinctNodesWithIssues: Number(counts.initialNodesWithViolations ?? 0),
+      liveDistinctNodesWithIssuesExcludingInitial: Number(
+        counts.liveDistinctNodesWithIssuesExcludingInitial ?? 0
+      ),
+      totalNodesInitialPlusLiveDistinct: Number(
+        counts.totalNodesInitialPlusLiveDistinct ?? (
+          Number(counts.initialNodesWithViolations ?? 0) +
+          Number(counts.liveDistinctNodesWithIssuesExcludingInitial ?? 0)
+        )
+      ),
+      liveScansCaptured: Number(counts.liveScans ?? 0),
+      monitorDroppedScans: Number(monitorMeta.dropped ?? 0),
+      monitorErrors: Number((report.errors || []).length ?? 0),
+      duplicatedViolationsFromEarlierReports: Number(
+        duplicateStats.duplicatedViolationsFromEarlierReports ?? 0
+      ),
+      duplicatedNodesFromEarlierReports: Number(
+        duplicateStats.duplicatedNodesFromEarlierReports ?? 0
+      ),
+      previousReportsInSpec: Math.max(0, reportEmissionInSpec > 0 ? reportEmissionInSpec - 1 : 0),
+    },
+    metricHelp: {
+      initialViolationsRaw: {
+        label: "Initial full-page violations (raw rule groups)",
+        description: "How many violation rule groups axe found in the first full-page scan.",
+        related: ["liveDistinctViolationInstancesExcludingInitial", "totalViolationsInitialPlusLiveDistinct"],
+      },
+      liveDistinctViolationInstancesExcludingInitial: {
+        label: "Live distinct violations (excluding initial)",
+        description:
+          "How many NEW live violation groups were found, counted by rule + page, excluding groups already seen in the initial full-page scan.",
+        related: ["initialViolationsRaw", "totalViolationsInitialPlusLiveDistinct"],
+      },
+      totalViolationsInitialPlusLiveDistinct: {
+        label: "Total violations (initial + live distinct)",
+        description:
+          "Overall grouped violation total for this report: initial full-page rule groups + new live rule groups (excluding initial overlaps).",
+        related: ["initialViolationsRaw", "liveDistinctViolationInstancesExcludingInitial"],
+      },
+      initialDistinctNodesWithIssues: {
+        label: "Initial distinct nodes with issues",
+        description: "How many unique elements had issues in the initial full-page scan.",
+        related: ["liveDistinctNodesWithIssuesExcludingInitial", "totalNodesInitialPlusLiveDistinct"],
+      },
+      liveDistinctNodesWithIssuesExcludingInitial: {
+        label: "Live distinct nodes (excluding initial)",
+        description:
+          "How many NEW unique elements had issues in live scans, excluding elements already seen in the initial full-page scan.",
+        related: ["initialDistinctNodesWithIssues", "totalNodesInitialPlusLiveDistinct"],
+      },
+      totalNodesInitialPlusLiveDistinct: {
+        label: "Total nodes (initial + live distinct)",
+        description:
+          "Overall unique-node total: initial distinct nodes + new live distinct nodes (excluding initial overlaps).",
+        related: ["initialDistinctNodesWithIssues", "liveDistinctNodesWithIssuesExcludingInitial"],
+      },
+      liveScansCaptured: {
+        label: "Live scans",
+        description:
+          "How many live/delta scans were actually executed while monitoring dynamic changes.",
+        related: ["monitorDroppedScans", "monitorErrors"],
+      },
+      monitorDroppedScans: {
+        label: "Dropped scans",
+        description: "How many queued live scan attempts were dropped by the monitor queue logic.",
+        related: ["liveScansCaptured", "monitorErrors"],
+      },
+      monitorErrors: {
+        label: "Monitor errors",
+        description: "Internal monitor runtime errors (engine/scan pipeline issues), not accessibility violations.",
+        related: ["liveScansCaptured", "monitorDroppedScans"],
+      },
+      duplicatedViolationsFromEarlierReports: {
+        label: "Duplicated grouped violations from earlier reports",
+        description:
+          "How many grouped violations (rule + page) in this report were already detected in earlier reports in the same spec file.",
+        related: ["duplicatedNodesFromEarlierReports", "previousReportsInSpec"],
+      },
+      duplicatedNodesFromEarlierReports: {
+        label: "Duplicated nodes from earlier reports",
+        description:
+          "How many node+page targets in this report were already seen in earlier reports in the same spec file.",
+        related: ["duplicatedViolationsFromEarlierReports", "previousReportsInSpec"],
+      },
+      previousReportsInSpec: {
+        label: "Previous reports in this spec",
+        description:
+          "How many reports were already emitted in this spec before this one. First report is 0.",
+        related: ["duplicatedViolationsFromEarlierReports", "duplicatedNodesFromEarlierReports"],
+      },
+    },
+  };
+  const summary = report.summary || fallbackSummary;
+  const identityRows = [
+    ["Report ID", escapeHtml(summary.identity?.reportId || "—")],
+    ["Spec file", escapeHtml(summary.identity?.specFile || "—")],
+    ["Cypress test", escapeHtml(summary.identity?.cypressTest || "—")],
+    ["Test in suite", escapeHtml(summary.identity?.testInSuite || "—")],
+    ["Local time (browser would vary)", escapeHtml(summary.identity?.generatedLocal || "—")],
+    ["Report file (JSON)", escapeHtml(summary.identity?.reportFileJson || "—")],
   ];
-
-  const summaryTable = summaryRows
+  const identityTable = identityRows
     .map(
       ([k, val]) => `
     <tr><th scope="row">${k}</th><td>${val}</td></tr>`
     )
     .join("");
+  const technicalOrder = Array.isArray(summary.technicalOrder) && summary.technicalOrder.length > 0
+    ? summary.technicalOrder
+    : fallbackSummary.technicalOrder;
+  const technicalRows = chunkIntoRows(technicalOrder, 3)
+    .map((row) => {
+      const cells = row.map((metricKey) => {
+        const metricHelp = summary.metricHelp?.[metricKey] || {};
+        const metricLabel = escapeHtml(metricHelp.label || metricKey);
+        const metricValue = escapeHtml(summary.technicalMetrics?.[metricKey] ?? "—");
+        const metricDescription = escapeHtml(metricHelp.description || "No description available.");
+        const related = Array.isArray(metricHelp.related) ? metricHelp.related : [];
+        const relatedLabels = related
+          .map((relatedKey) => summary.metricHelp?.[relatedKey]?.label || relatedKey)
+          .join(", ");
+        const relatedHtml = relatedLabels
+          ? `<p class="tech-related subtle"><strong>Related:</strong> ${escapeHtml(relatedLabels)}</p>`
+          : "";
+        return `<td class="tech-cell">
+  <details class="tech-metric">
+    <summary>
+      <span class="tech-metric-label">${metricLabel}</span>
+      <span class="tech-metric-value">${metricValue}</span>
+    </summary>
+    <div class="tech-metric-help">
+      <p>${metricDescription}</p>
+      ${relatedHtml}
+    </div>
+  </details>
+</td>`;
+      }).join("");
+      const padCount = 3 - row.length;
+      const pads = padCount > 0 ? "<td class=\"tech-cell tech-cell-empty\"></td>".repeat(padCount) : "";
+      return `<tr>${cells}${pads}</tr>`;
+    })
+    .join("");
 
   const sevPills = severityTotalsOrder
     .map((s) => {
       const n = bySev[s] ?? 0;
-      return `<a class="sev-pill ${severityClass(s)}" href="#sev-${escapeHtml(s)}">${escapeHtml(s)}: ${n}</a>`;
+      const sectionType = severitySectionTypeLabel(s, bySevDisposition);
+      return `<a class="sev-pill ${severityClass(s)}" href="#sev-${escapeHtml(s)}">${sectionType} - ${escapeHtml(s)}: ${n}</a>`;
     })
     .join(" ");
 
@@ -342,8 +554,12 @@ const renderLiveA11yReportHtml = (report) => {
         <span class="analysis-option-values">${renderOptionPills(configuredRunOnlyTags) || "All configured axe-core rules"}</span>
       </div>
       <div class="analysis-option-row">
-        <span class="analysis-option-label">Impacts included</span>
-        <span class="analysis-option-values">${renderOptionPills(severityTotalsOrder)}</span>
+        <span class="analysis-option-label">Impacts that fail</span>
+        <span class="analysis-option-values">${renderOptionPills(configuredIncludedImpactLevels) || '<span class="subtle">None</span>'}</span>
+      </div>
+      <div class="analysis-option-row">
+        <span class="analysis-option-label">Impacts that warn only</span>
+        <span class="analysis-option-values">${renderOptionPills(configuredWarnImpactLevels) || '<span class="subtle">None</span>'}</span>
       </div>
     </section>`;
 
@@ -351,13 +567,18 @@ const renderLiveA11yReportHtml = (report) => {
     .map((sev) => {
       const list = violations.filter((v) => String(v.impact || "").toLowerCase() === sev);
       if (list.length === 0) return "";
+      const sectionType = severitySectionTypeLabel(sev, bySevDisposition);
+      const sectionDisposition = sectionType === "WARNINGS" ? "warn" : "fail";
       return `
   <section class="sev-block ${severityClass(sev)}-section" id="sev-${escapeHtml(sev)}" aria-labelledby="sev-${escapeHtml(sev)}-heading">
     <header class="sev-block-header">
       <div>
-        <p class="sev-block-eyebrow">Severity section</p>
+        <p class="sev-block-eyebrow">${String(sev).toUpperCase()} severity section</p>
         <h2 id="sev-${escapeHtml(sev)}-heading">
           <span class="badge ${severityClass(sev)}">${escapeHtml(sev)}</span>
+          <span class="outcome-badge ${dispositionClass(sectionDisposition)}">${escapeHtml(
+    dispositionLabel(sectionDisposition)
+  )}</span>
           <span>${list.length} grouped rule(s)</span>
         </h2>
       </div>
@@ -366,7 +587,9 @@ const renderLiveA11yReportHtml = (report) => {
     <div class="sev-block-body">
       ${list.map(renderViolationCard).join("\n")}
     </div>
-    <div class="sev-block-end" aria-hidden="true">End of ${escapeHtml(sev)} section</div>
+    <div class="sev-block-end" aria-hidden="true">End of ${String(sev).toUpperCase()} severity section (${escapeHtml(
+    dispositionLabel(sectionDisposition).toLowerCase()
+  )})</div>
   </section>`;
     })
     .join("");
@@ -416,9 +639,97 @@ const renderLiveA11yReportHtml = (report) => {
     h3 { font-size: 1rem; margin: 0; display: inline; font-weight: 600; }
     a { color: var(--link); }
     .subtle { color: var(--muted); font-size: 0.9rem; }
-    .summary { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; margin: 1rem 0; }
+    .summary {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border-radius: 8px;
+      overflow: hidden;
+      margin: 0.5rem 0 1rem;
+    }
     .summary th, .summary td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
     .summary th { width: 42%; color: var(--muted); font-weight: 500; }
+    .summary-groups {
+      display: grid;
+      grid-template-columns: minmax(18rem, 1fr);
+      gap: 1rem;
+      margin: 1rem 0 1.25rem;
+    }
+    .summary-group {
+      background: #111821;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.7rem 0.75rem 0.15rem;
+    }
+    .summary-group h2 {
+      font-size: 1rem;
+      margin: 0.15rem 0 0.35rem;
+    }
+    .summary-group .subtle {
+      margin: 0;
+    }
+    .tech-grid {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0.5rem;
+      margin: 0.35rem 0 0.65rem;
+    }
+    .tech-cell {
+      width: 33.33%;
+      vertical-align: top;
+      background: #161b22;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.4rem 0.5rem;
+    }
+    .tech-cell-empty {
+      background: transparent;
+      border-style: dashed;
+      border-color: #232a34;
+    }
+    .tech-metric summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 0.22rem;
+      outline: none;
+    }
+    .tech-metric summary::-webkit-details-marker { display: none; }
+    .tech-metric summary::before {
+      content: "▶";
+      font-size: 0.65rem;
+      color: var(--muted);
+      margin-right: 0.32rem;
+      display: inline-block;
+      vertical-align: middle;
+    }
+    .tech-metric[open] summary::before { content: "▼"; }
+    .tech-metric-label {
+      color: var(--muted);
+      font-size: 0.74rem;
+      font-weight: 600;
+      line-height: 1.25;
+    }
+    .tech-metric-value {
+      color: var(--text);
+      font-size: 1.1rem;
+      font-weight: 700;
+      line-height: 1.1;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      margin-left: 0.98rem;
+    }
+    .tech-metric-help {
+      margin-top: 0.45rem;
+      border-top: 1px dashed var(--border);
+      padding-top: 0.45rem;
+      font-size: 0.84rem;
+      color: #c9d1d9;
+      line-height: 1.45;
+    }
+    .tech-metric-help p {
+      margin: 0.25rem 0;
+    }
     .analysis-options {
       margin: 1rem 0 1.25rem;
       padding: 1rem;
@@ -545,6 +856,25 @@ const renderLiveA11yReportHtml = (report) => {
     .violation-stats { margin: 0.4rem 0; }
     .violation header { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
     .badge { font-size: 0.7rem; text-transform: uppercase; padding: 0.15rem 0.4rem; border-radius: 4px; font-weight: 700; }
+    .outcome-badge {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.02em;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-weight: 700;
+    }
+    .disp-fail {
+      background: rgba(248, 81, 73, 0.15);
+      color: #f85149;
+      border-color: rgba(248, 81, 73, 0.45);
+    }
+    .disp-warn {
+      background: rgba(227, 179, 65, 0.16);
+      color: #e3b341;
+      border-color: rgba(227, 179, 65, 0.45);
+    }
     .help { margin: 0.5rem 0; }
     .meta { font-size: 0.9rem; color: var(--muted); }
     .tag { display: inline-block; background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.75rem; margin: 0.1rem; }
@@ -640,9 +970,22 @@ const renderLiveA11yReportHtml = (report) => {
   <div class="wrap">
     <h1 id="top">wick-a11y-observer accessibility report</h1>
     <p class="subtle">Readable summary of grouped axe-core violations (initial + live). Open <strong>Rule docs</strong> for remediation.</p>
-    <table class="summary" role="table" aria-label="Run summary">
-      <tbody>${summaryTable}</tbody>
-    </table>
+    <div class="summary-groups" aria-label="Top summary sections">
+      <section class="summary-group summary-group-identity" aria-label="Report identity">
+        <h2>Report Identity</h2>
+        <p class="subtle">Stable report metadata and file references.</p>
+        <table class="summary" role="table" aria-label="Report identity summary">
+          <tbody>${identityTable}</tbody>
+        </table>
+      </section>
+      <section class="summary-group summary-group-technical" aria-label="Technical metrics">
+        <h2>Technical Metrics</h2>
+        <p class="subtle">Click any metric card to see plain-language meaning and how it relates to others.</p>
+        <table class="tech-grid" role="table" aria-label="Technical metrics grid">
+          <tbody>${technicalRows}</tbody>
+        </table>
+      </section>
+    </div>
     ${analysisOptions}
     <p class="subtle">By severity (grouped rules)</p>
     <div class="sev-pills">${sevPills || "<span class=\"subtle\">No violations in grouped output.</span>"}</div>

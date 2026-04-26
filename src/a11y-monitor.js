@@ -58,13 +58,43 @@ function createDefaultStore() {
   };
 }
 
+const IMPACT_LEVELS = ['critical', 'serious', 'moderate', 'minor'];
+
+function getConfiguredImpactsFromA11yOptions(axeOptions) {
+  if (axeOptions && Object.prototype.hasOwnProperty.call(axeOptions, 'includedImpacts')) {
+    return axeOptions.includedImpacts;
+  }
+  if (axeOptions && Object.prototype.hasOwnProperty.call(axeOptions, 'impactLevels')) {
+    return axeOptions.impactLevels;
+  }
+  return undefined;
+}
+
 function normalizeImpactLevelsFromA11yOptions(axeOptions) {
-  const configured = axeOptions?.includedImpacts || axeOptions?.impactLevels;
+  const configured = getConfiguredImpactsFromA11yOptions(axeOptions);
+  if (configured === undefined) {
+    return [...IMPACT_LEVELS];
+  }
   if (!Array.isArray(configured) || configured.length === 0) {
-    return ['critical', 'serious', 'moderate', 'minor'];
+    return [];
   }
 
-  const allowed = new Set(['critical', 'serious', 'moderate', 'minor']);
+  const allowed = new Set(IMPACT_LEVELS);
+  return [...new Set(configured.map((level) => String(level).toLowerCase()))].filter((level) =>
+    allowed.has(level)
+  );
+}
+
+function normalizeWarnImpactLevelsFromA11yOptions(axeOptions) {
+  if (!axeOptions || !Object.prototype.hasOwnProperty.call(axeOptions, 'onlyWarnImpacts')) {
+    return [];
+  }
+  const configured = axeOptions.onlyWarnImpacts;
+  if (!Array.isArray(configured) || configured.length === 0) {
+    return [];
+  }
+
+  const allowed = new Set(IMPACT_LEVELS);
   return [...new Set(configured.map((level) => String(level).toLowerCase()))].filter((level) =>
     allowed.has(level)
   );
@@ -80,16 +110,30 @@ function normalizeRunOnlyValuesFromA11yOptions(axeOptions) {
 }
 
 function getExplicitImpactFilterFromA11yOptions(axeOptions) {
-  const configured = axeOptions?.includedImpacts || axeOptions?.impactLevels;
-  if (!Array.isArray(configured) || configured.length === 0) {
+  const configuredIncluded = getConfiguredImpactsFromA11yOptions(axeOptions);
+  const configuredWarn =
+    axeOptions && Object.prototype.hasOwnProperty.call(axeOptions, 'onlyWarnImpacts')
+      ? axeOptions.onlyWarnImpacts
+      : undefined;
+  if (configuredIncluded === undefined && configuredWarn === undefined) {
     return null;
   }
 
-  const allowed = new Set(['critical', 'serious', 'moderate', 'minor']);
-  const normalized = [...new Set(configured.map((level) => String(level).toLowerCase()))].filter(
-    (level) => allowed.has(level)
+  const allowed = new Set(IMPACT_LEVELS);
+  const normalizedIncluded = Array.isArray(configuredIncluded)
+    ? [...new Set(configuredIncluded.map((level) => String(level).toLowerCase()))].filter((level) =>
+      allowed.has(level)
+    )
+    : [];
+  const normalizedWarn = Array.isArray(configuredWarn)
+    ? [...new Set(configuredWarn.map((level) => String(level).toLowerCase()))].filter((level) =>
+      allowed.has(level)
+    )
+    : [];
+  const normalized = [...new Set([...normalizedIncluded, ...normalizedWarn])].filter((level) =>
+    allowed.has(level)
   );
-  return normalized.length > 0 ? normalized : null;
+  return normalized;
 }
 
 function normalizeA11yRunOptions(axeOptions = {}) {
@@ -97,6 +141,7 @@ function normalizeA11yRunOptions(axeOptions = {}) {
   // Severity filtering is handled by plugin-level post-processing for determinism.
   delete normalized.includedImpacts;
   delete normalized.impactLevels;
+  delete normalized.onlyWarnImpacts;
   return normalized;
 }
 
@@ -226,11 +271,20 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     };
   }
 
-  const configuredImpactLevels = [
+  const configuredIncludedImpactLevels = [
     ...new Set([
       ...normalizeImpactLevelsFromA11yOptions(options.initialAxeOptions),
       ...normalizeImpactLevelsFromA11yOptions(options.liveAxeOptions),
     ]),
+  ];
+  const configuredWarnImpactLevels = [
+    ...new Set([
+      ...normalizeWarnImpactLevelsFromA11yOptions(options.initialAxeOptions),
+      ...normalizeWarnImpactLevelsFromA11yOptions(options.liveAxeOptions),
+    ]),
+  ].filter((level) => !configuredIncludedImpactLevels.includes(level));
+  const configuredEffectiveImpactLevels = [
+    ...new Set([...configuredIncludedImpactLevels, ...configuredWarnImpactLevels]),
   ];
   const configuredRunOnlyTags = [
     ...new Set([
@@ -239,9 +293,13 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     ]),
   ];
   store.meta.analysis = {
-    configuredImpactLevels,
+    configuredImpactLevels: configuredEffectiveImpactLevels,
+    configuredIncludedImpactLevels,
+    configuredWarnImpactLevels,
     initialImpactLevels: normalizeImpactLevelsFromA11yOptions(options.initialAxeOptions),
     liveImpactLevels: normalizeImpactLevelsFromA11yOptions(options.liveAxeOptions),
+    initialWarnImpactLevels: normalizeWarnImpactLevelsFromA11yOptions(options.initialAxeOptions),
+    liveWarnImpactLevels: normalizeWarnImpactLevelsFromA11yOptions(options.liveAxeOptions),
     configuredRunOnlyTags,
     initialRunOnlyTags: normalizeRunOnlyValuesFromA11yOptions(options.initialAxeOptions),
     liveRunOnlyTags: normalizeRunOnlyValuesFromA11yOptions(options.liveAxeOptions),

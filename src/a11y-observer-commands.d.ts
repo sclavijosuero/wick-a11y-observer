@@ -4,6 +4,7 @@ export interface LiveA11yRunOptions {
   resultTypes?: Array<"violations" | "passes" | "incomplete" | "inapplicable">;
   iframes?: boolean;
   includedImpacts?: Array<"critical" | "serious" | "moderate" | "minor">;
+  onlyWarnImpacts?: Array<"critical" | "serious" | "moderate" | "minor">;
   impactLevels?: Array<"critical" | "serious" | "moderate" | "minor">;
   runOnly?: {
     type?: string;
@@ -41,18 +42,16 @@ export interface LiveA11yMonitorOptions {
   [option: string]: unknown;
 }
 
-export interface StandardLiveA11yMonitorRunOptions {
-  shared?: LiveA11yRunOptions;
-  initial?: LiveA11yRunOptions;
-  live?: LiveA11yRunOptions;
-}
-
-export type StandardLiveA11yMonitorOptions = Omit<
+export type LiveA11yObserverOptions = Omit<
   LiveA11yMonitorOptions,
   "initialAxeOptions" | "liveAxeOptions"
-> & {
-  runOptions?: StandardLiveA11yMonitorRunOptions;
-};
+>;
+
+export interface SetupLiveA11yMonitorOptions {
+  initialAxeOptions?: LiveA11yRunOptions;
+  liveAxeOptions?: LiveA11yRunOptions;
+  observerOptions?: LiveA11yObserverOptions;
+}
 
 export interface RunInitialLiveA11yScanCommandOptions {
   armAfter?: boolean;
@@ -76,11 +75,28 @@ export interface ReportLiveA11yValidationOptions {
   minUniqueLiveRuleIds?: number;
   requiredLiveRuleIds?: string[];
   minGroupedBySeverity?: Partial<Record<"critical" | "serious" | "moderate" | "minor", number>>;
+  failOnIncludedImpacts?: boolean;
 }
 
 export interface ReportLiveA11yResultsOptions {
   outputPath?: string;
   validation?: ReportLiveA11yValidationOptions;
+  throwOnValidationFailure?: boolean;
+}
+
+export interface LiveA11yAutoLifecycleInitialScanOptions {
+  axeOptions?: LiveA11yRunOptions;
+  commandOptions?: RunInitialLiveA11yScanCommandOptions;
+}
+
+export interface LiveA11yAutoLifecycleOptions {
+  setupOptions?: SetupLiveA11yMonitorOptions;
+  initialScan?: LiveA11yAutoLifecycleInitialScanOptions;
+  waitForIdleOptions?: WaitForLiveA11yIdleOptions;
+  reportOptions?: ReportLiveA11yResultsOptions;
+  failTestOnValidationError?: boolean;
+  failRunOnValidationError?: boolean;
+  stopMonitorAfterEach?: boolean;
 }
 
 export interface LiveA11yStore {
@@ -97,6 +113,8 @@ export interface LiveA11yStore {
     [key: string]: unknown;
   };
 }
+
+export function registerLiveA11yAutoLifecycle(options?: LiveA11yAutoLifecycleOptions): void;
 
 export interface LiveA11yScan {
   rootId?: string | number;
@@ -148,10 +166,26 @@ export interface LiveA11yReport {
     liveScans: number;
     liveViolations: number;
     liveNodesWithViolations: number;
+    liveDistinctViolationInstancesExcludingInitial?: number;
+    liveDistinctNodesWithIssuesExcludingInitial?: number;
+    totalViolationsInitialPlusLiveDistinct?: number;
+    totalNodesInitialPlusLiveDistinct?: number;
     groupedViolations: number;
     groupedBySeverity: Partial<Record<"critical" | "serious" | "moderate" | "minor", number>>;
+    groupedBySeverityDisposition?: Partial<
+      Record<
+        "critical" | "serious" | "moderate" | "minor",
+        { fail: number; warn: number; sectionType: "violation" | "warning" | "none" }
+      >
+    >;
+    groupedByDisposition?: Partial<Record<"fail" | "warn", number>>;
   };
   severityOrder: string[];
+  impactPolicy?: {
+    included: Array<"critical" | "serious" | "moderate" | "minor">;
+    warn: Array<"critical" | "serious" | "moderate" | "minor">;
+    considered: Array<"critical" | "serious" | "moderate" | "minor">;
+  };
   groupedViolations: LiveA11yGroupedViolation[];
   raw: LiveA11yStore;
   reportArtifact?: LiveA11yReportArtifact;
@@ -162,6 +196,26 @@ export interface LiveA11yReport {
   savedTo?: string;
   savedHtmlTo?: string;
   htmlReportRelative?: string;
+  summary?: {
+    identity?: {
+      reportId?: string;
+      specFile?: string;
+      cypressTest?: string;
+      testInSuite?: string;
+      generatedLocal?: string;
+      reportFileJson?: string;
+    };
+    technicalOrder?: string[];
+    technicalMetrics?: Record<string, number>;
+    metricHelp?: Record<
+      string,
+      {
+        label?: string;
+        description?: string;
+        related?: string[];
+      }
+    >;
+  };
   validation?: {
     valid: boolean;
     errors: string[];
@@ -183,6 +237,7 @@ export interface LiveA11yGroupedViolation {
   nodes: string[];
   nodeDetails: LiveA11yGroupedNode[];
   uniqueNodeCount: number;
+  disposition?: "fail" | "warn";
   rawViolations: unknown[];
 }
 
@@ -224,11 +279,7 @@ declare global {
   namespace Cypress {
     interface Chainable<Subject = any> {
       setupLiveA11yMonitor(
-        monitorOptions?: LiveA11yMonitorOptions
-      ): Chainable<LiveA11yStore>;
-
-      setupStandardLiveA11yMonitor(
-        monitorOptions?: StandardLiveA11yMonitorOptions
+        monitorOptions?: SetupLiveA11yMonitorOptions
       ): Chainable<LiveA11yStore>;
 
       runInitialLiveA11yScan(
@@ -245,6 +296,10 @@ declare global {
       getLiveA11yResults(): Chainable<LiveA11yStore | null>;
 
       reportLiveA11yResults(options?: ReportLiveA11yResultsOptions): Chainable<LiveA11yReport>;
+
+      setLiveA11yAutoReportOptions(options?: ReportLiveA11yResultsOptions): Chainable<void>;
+
+      setLiveA11yAutoSetupOptions(options?: SetupLiveA11yMonitorOptions): Chainable<void>;
     }
   }
 }

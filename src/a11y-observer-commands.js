@@ -1,6 +1,8 @@
 import { attachLiveA11yMonitor, createLiveA11yStore } from './a11y-setup';
 
 const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = 'cypress/accessibility';
+const LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY = '__liveA11yAutoReportOptions';
+const LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY = '__liveA11yAutoSetupOptions';
 
 /**
  * @param {string} p
@@ -104,6 +106,7 @@ const DEFAULT_AXE_SCAN_OPTIONS = {
   resultTypes: ['violations', 'incomplete'],
   iframes: true,
   includedImpacts: ['critical', 'serious'],
+  onlyWarnImpacts: [],
   runOnly: {
     type: 'tag',
     values: AXE_STANDARD_TAGS,
@@ -355,6 +358,25 @@ const severitySectionEmoji = (impact) => {
   }
 };
 
+const outcomeLabel = (violation = {}) =>
+  violation?.disposition === 'warn' ? 'WARNING' : 'FAIL';
+
+const severitySectionTypeLabel = ({ failCount = 0, warnCount = 0 } = {}) => {
+  if (Number(failCount) > 0) return 'VIOLATIONS';
+  if (Number(warnCount) > 0) return 'WARNINGS';
+  return 'VIOLATIONS';
+};
+
+const severitySummaryLabel = (severity, impactPolicy = {}) => {
+  const included = new Set(impactPolicy?.included || []);
+  const warn = new Set(impactPolicy?.warn || []);
+  const normalized = String(severity || '').toLowerCase();
+  if (warn.has(normalized) && !included.has(normalized)) {
+    return `${String(normalized).toUpperCase()} WARNINGS`;
+  }
+  return `${String(normalized).toUpperCase()} VIOLATIONS`;
+};
+
 const autDocument = () => Cypress.state('window')?.document || null;
 
 const ensureGhostOverlay = () => {
@@ -494,7 +516,15 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         (acc, item) => acc + Number(item?.uniqueNodeCount || 0),
         0
       );
-      const sectionMessage = `────────── ${sectionEmoji} ${badge} VIOLATIONS (V:${totalGroupsForSeverity} | N:${totalNodesForSeverity}) ${sectionEmoji} ──────────`;
+      const warnGroupsForSeverity = violationsForSeverity.filter(
+        (item) => item?.disposition === 'warn'
+      ).length;
+      const failGroupsForSeverity = totalGroupsForSeverity - warnGroupsForSeverity;
+      const sectionTypeLabel = severitySectionTypeLabel({
+        failCount: failGroupsForSeverity,
+        warnCount: warnGroupsForSeverity,
+      });
+      const sectionMessage = `────── ${sectionEmoji} ${sectionTypeLabel} - ${badge} (FAIL:${failGroupsForSeverity} | WARN:${warnGroupsForSeverity} | N:${totalNodesForSeverity}) ${sectionEmoji} ──────`;
       Cypress.log({
         name: '',
         message: sectionMessage,
@@ -502,24 +532,25 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
           type: 'severity-section',
           severity: severityKey,
           severityBadge: badge,
+          sectionType: sectionTypeLabel,
           totalViolationsInSeverity: totalGroupsForSeverity,
           totalNodesAffectedInSeverity: totalNodesForSeverity,
-          violations: violationsForSeverity.map((item) => ({
+          groupedViolationsForSeverity: violationsForSeverity.map((item) => ({
             id: item.id,
             help: item.help,
             impact: item.impact,
+            disposition: item.disposition || 'fail',
             uniqueNodeCount: item.uniqueNodeCount,
             totalOccurrences: item.totalOccurrences,
             phases: item.phases,
           })),
-          groupedViolationsForSeverity: violationsForSeverity,
           message: sectionMessage,
         }),
       });
       previousSeverity = severityKey;
       hasLoggedGroupInSeverity = false;
     } else if (hasLoggedGroupInSeverity) {
-      const groupDividerMessage = '───────────────────';
+      const groupDividerMessage = '·   ·   ·   ·   ·';
       Cypress.log({
         name: '',
         message: groupDividerMessage,
@@ -591,11 +622,12 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
 
     Cypress.log({
       name: `${colorMark} A11Y`,
-      message: `#${violationIndex + 1} [${badge}] ${violation.id} - ${violation.help} (${violation.uniqueNodeCount} nodes affected)${repeatedGroupSuffix}${missingGroupElementsSuffix}`,
+      message: `#${violationIndex + 1} [${badge}] [${outcomeLabel(violation)}] ${violation.id} - ${violation.help} (NODES:${violation.uniqueNodeCount})${repeatedGroupSuffix}${missingGroupElementsSuffix}`,
       $el: groupElements,
       consoleProps: () => ({
         ruleId: violation.id,
         severity: violation.impact,
+        disposition: violation.disposition || 'fail',
         help: violation.help,
         helpUrl: violation.helpUrl,
         description: violation.description,
@@ -655,10 +687,9 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
           )
           : visibleNodeElements;
         const pageHint = node.pageUrl
-          ? ` | page: ${
-            String(node.pageUrl).length > 56
-              ? `${String(node.pageUrl).slice(0, 53)}…`
-              : String(node.pageUrl)
+          ? ` | page: ${String(node.pageUrl).length > 56
+            ? `${String(node.pageUrl).slice(0, 53)}…`
+            : String(node.pageUrl)
           }`
           : '';
         Cypress.log({
@@ -704,33 +735,37 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
   currentTestNodeKeys.forEach((key) => previouslySeenNodeKeys.add(key));
 };
 
-Cypress.Commands.add('setupLiveA11yMonitor', (monitorOptions = {}) => {
+Cypress.Commands.add('setupCoreLiveA11yMonitor', (monitorOptions = {}) => {
   const store = createLiveA11yStore();
   attachLiveA11yMonitor(store, monitorOptions);
   return cy.wrap(store, { log: false }).as('liveA11yStore');
 });
 
-Cypress.Commands.add('setupStandardLiveA11yMonitor', (monitorOptions = {}) => {
+const resolveLiveA11yMonitorInstallOptions = (monitorOptions = {}) => {
   const {
-    runOptions = {},
-    ...restMonitorOptions
+    initialAxeOptions = {},
+    liveAxeOptions = {},
+    observerOptions = {},
   } = monitorOptions;
 
-  const sharedRunOptions = runOptions.shared || {};
   const computedInitialOptions = mergeA11yRunOptions(
-    mergeA11yRunOptions(DEFAULT_AXE_SCAN_OPTIONS, sharedRunOptions),
-    runOptions.initial || {}
+    DEFAULT_AXE_SCAN_OPTIONS,
+    initialAxeOptions
   );
   const computedLiveOptions = mergeA11yRunOptions(
-    mergeA11yRunOptions(DEFAULT_AXE_SCAN_OPTIONS, sharedRunOptions),
-    runOptions.live || {}
+    DEFAULT_AXE_SCAN_OPTIONS,
+    liveAxeOptions
   );
 
-  return cy.setupLiveA11yMonitor({
+  return {
+    ...observerOptions,
     initialAxeOptions: computedInitialOptions,
     liveAxeOptions: computedLiveOptions,
-    ...restMonitorOptions,
-  });
+  };
+};
+
+Cypress.Commands.add('setupLiveA11yMonitor', (monitorOptions = {}) => {
+  return cy.setupCoreLiveA11yMonitor(resolveLiveA11yMonitorInstallOptions(monitorOptions));
 });
 
 Cypress.Commands.add(
@@ -770,10 +805,19 @@ Cypress.Commands.add('waitForLiveA11yIdle', (options = {}) => {
   return cy.window({ log: false }).then((win) => {
     if (!win.__liveA11yMonitor) return null;
 
-    // Use cy.wrap timeout so Cypress does not fail before waitForIdle's own timeout.
-    return cy.wrap(win.__liveA11yMonitor.waitForIdle(idleOptions), {
+    const monitor = win.__liveA11yMonitor;
+    const hardTimeoutMs = Number(idleOptions.timeoutMs || 8000) + 1000;
+    const idlePromise = Cypress.Promise.race([
+      monitor.waitForIdle(idleOptions),
+      new Cypress.Promise((resolve) => {
+        setTimeout(() => resolve(monitor?.store ?? null), hardTimeoutMs);
+      }),
+    ]).catch(() => monitor?.store ?? null);
+
+    // Use cy.wrap timeout > hard fallback timeout.
+    return cy.wrap(idlePromise, {
       log: false,
-      timeout: idleOptions.timeoutMs + 1000,
+      timeout: hardTimeoutMs + 500,
     });
   });
 });
@@ -791,11 +835,13 @@ Cypress.Commands.add('getLiveA11yResults', () => {
 
 Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
   const { outputPath, reportMeta } = buildLiveA11yOutputPathAndMeta(options.outputPath);
+  const throwOnValidationFailure = options.throwOnValidationFailure !== false;
   const validation = {
     enabled: true,
     requireInitialScan: true,
     minLiveScans: 1,
     requireNoRuntimeErrors: true,
+    failOnIncludedImpacts: true,
     ...options.validation,
   };
 
@@ -812,6 +858,7 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
         validation,
         reportMeta,
         repeatInfo: { previousNodeKeys, firstReportIdByKey },
+        deferValidationFailure: true,
       },
       { log: false }
     ).then((report) => {
@@ -819,9 +866,13 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
       recordFirstReportIdsFromGroupedReport(report?.groupedViolations, rid);
       resetGhostOverlay();
       const groupedBySeverity = report.counts.groupedBySeverity || {};
-      const severityMessage = Object.entries(groupedBySeverity)
-        .map(([severity, count]) => `${severity}:${count}`)
-        .join(' ');
+      const groupedByDisposition = report.counts.groupedByDisposition || {};
+      const reportSummary = report?.summary || {};
+      const technicalOrder = Array.isArray(reportSummary?.technicalOrder) && reportSummary.technicalOrder.length > 0
+        ? reportSummary.technicalOrder
+        : [];
+      const technicalMetrics = reportSummary?.technicalMetrics || {};
+      const metricHelp = reportSummary?.metricHelp || {};
       const summaryForConsole = {
         initialScans: report.counts.initialScans,
         initialViolations: report.counts.initialViolations,
@@ -833,30 +884,33 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
         monitorErrors: report.errors?.length || 0,
         groupedViolations: report.counts.groupedViolations,
         severityCounts: groupedBySeverity,
+        outcomeCounts: groupedByDisposition,
+        technicalMetrics,
       };
-      logGroupedViolations(report.groupedViolations, report.raw);
+      cy.log('──────────── 📊 𝗩𝗜𝗢𝗟𝗔𝗧𝗜𝗢𝗡 𝗦𝗨𝗠𝗠𝗔𝗥𝗬 📊 ────────────');
       Cypress.log({
         name: '',
-        message: '──────────── 📊 VIOLATION DETAILS 📊 ────────────',
+        message: '──────────── 📝 𝗩𝗜𝗢𝗟𝗔𝗧𝗜𝗢𝗡 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 (𝗰𝗼𝗻𝘀𝗼𝗹𝗲 𝗽𝗿𝗼𝗽𝘀) 📝 ────────────',
+
         consoleProps: () => summaryForConsole,
       });
-      cy.log(`Initial scan: ${report.counts.initialScans}`);
-      cy.log(`Initial violations: ${report.counts.initialViolations}`);
-      cy.log(
-        `Initial distinct nodes with violations: ${report.counts.initialNodesWithViolations || 0}`
-      );
-      cy.log(`Live scans: ${report.counts.liveScans}`);
-      cy.log(`Live violations: ${report.counts.liveViolations}`);
-      cy.log(
-        `Live distinct nodes with violations: ${report.counts.liveNodesWithViolations || 0}`
-      );
-      cy.log(`Dropped scans: ${report.meta?.dropped || 0}`);
-      cy.log(`Monitor errors: ${report.errors?.length || 0}`);
-      cy.log(`Grouped violations: ${report.counts.groupedViolations}`);
-      if (severityMessage) {
-        cy.log(`Severity counts -> ${severityMessage}`);
-      }
+      const severityOrder = Array.isArray(report?.severityOrder)
+        ? report.severityOrder
+        : ['critical', 'serious', 'moderate', 'minor'];
       const ar = report?.reportArtifact || {};
+      severityOrder.forEach((severity) => {
+        const count = Number(groupedBySeverity?.[severity] ?? 0);
+        const label = severitySummaryLabel(severity, report?.impactPolicy || {});
+        cy.log(`• ${label} ${severityColorMark(severity)} : ${count}`);
+      });
+      logGroupedViolations(report.groupedViolations, report.raw);
+      cy.log('· · · · ·');
+      technicalOrder.forEach((metricKey) => {
+        const metricLabel = metricHelp?.[metricKey]?.label || metricKey;
+        const metricValue = Number(technicalMetrics?.[metricKey] ?? 0);
+        cy.log(`${metricLabel}: ${metricValue}`);
+      });
+      cy.log('· · · · ·');
       if (ar.reportId) {
         cy.log(`Live a11y reportId: ${ar.reportId}`);
       }
@@ -876,7 +930,271 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
       if (report?.htmlReportRelative) {
         cy.log(`Live a11y HTML: ${report.htmlReportRelative}`);
       }
-      return cy.wrap(report, { log: false });
+      return cy.wrap(report, { log: false }).then((resolvedReport) => {
+        if (!resolvedReport?.validation?.valid && throwOnValidationFailure) {
+          const errors = Array.isArray(resolvedReport?.validation?.errors)
+            ? resolvedReport.validation.errors
+            : ['Unknown validation error'];
+          throw new Error(`Live a11y validation failed:\n- ${errors.join('\n- ')}`);
+        }
+        return resolvedReport;
+      });
     });
   });
 });
+
+const resolveCurrentTestFromHookContext = (hookThis) => {
+  if (hookThis?.currentTest) {
+    return hookThis.currentTest;
+  }
+  return cy.state('runnable')?.ctx?.currentTest || null;
+};
+
+const markTestAsFailedWithoutThrowingHook = (hookThis, message, report) => {
+  const test = resolveCurrentTestFromHookContext(hookThis);
+  if (!test) {
+    return;
+  }
+  const error = new Error(message);
+  error.name = 'LiveA11yValidationError';
+  error.reportPath = report?.reportArtifact?.relativePath || report?.savedTo;
+  error.reportId = report?.reportArtifact?.reportId;
+  const runner = Cypress.mocha?.getRunner?.();
+  if (runner && typeof runner.fail === 'function') {
+    runner.fail(test, error);
+    return;
+  }
+  test.err = error;
+  test.state = 'failed';
+};
+
+Cypress.Commands.add('setLiveA11yAutoReportOptions', (options = {}) => {
+  return cy.then(() => {
+    Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY, options);
+  });
+});
+
+Cypress.Commands.add('setLiveA11yAutoSetupOptions', (options = {}) => {
+  return cy.then(() => {
+    Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY, options);
+  });
+});
+
+const mergeLiveA11ySetupOptions = (base = {}, override = {}) => ({
+  ...base,
+  ...override,
+  initialAxeOptions: {
+    ...(base.initialAxeOptions || {}),
+    ...(override.initialAxeOptions || {}),
+  },
+  liveAxeOptions: {
+    ...(base.liveAxeOptions || {}),
+    ...(override.liveAxeOptions || {}),
+  },
+  observerOptions: {
+    ...(base.observerOptions || {}),
+    ...(override.observerOptions || {}),
+  },
+});
+
+const logLiveA11yValidationMarker = ({
+  testKey,
+  reportPath,
+  validationErrors = [],
+  failCount = 0,
+  warnCount = 0,
+  markedFailed = false,
+  isValid = false,
+}) => {
+  const prefix = isValid
+    ? '✅ LIVE A11Y TEST PASS'
+    : markedFailed
+      ? '❌ LIVE A11Y TEST FAILURE'
+      : '❌ LIVE A11Y VALIDATION (TEST MAY APPEAR PASSED)';
+  const shortErrors = (validationErrors || []).slice(0, 3);
+  const shortErrorsLabel = shortErrors.length > 0 ? shortErrors.join(' | ') : 'Unknown validation error';
+  const message = isValid
+    ? `${testKey} | fail-groups:${failCount} | warn-groups:${warnCount} | no failing violations`
+    : `${testKey} | fail-groups:${failCount} | warn-groups:${warnCount} | ${shortErrorsLabel}`;
+  Cypress.log({
+    name: prefix,
+    message,
+    consoleProps: () => ({
+      test: testKey,
+      failGroups: failCount,
+      warnGroups: warnCount,
+      reportPath,
+      validationErrors,
+      note: markedFailed
+        ? 'Validation failure was mapped to this test.'
+        : isValid
+          ? 'Validation passed for this test.'
+          : 'Validation failed but test may still appear passed in Cypress summary.',
+    }),
+  });
+};
+
+let isLiveA11yVisitOverwriteInstalled = false;
+
+const ensureLiveA11yVisitOverwrite = ({ setupOptions, initialScan }) => {
+  if (isLiveA11yVisitOverwriteInstalled) {
+    return;
+  }
+  Cypress.Commands.overwrite('visit', (originalFn, ...args) => {
+    const store = createLiveA11yStore();
+    const resolvedCommandOptions = initialScan?.commandOptions || {
+      armAfter: false,
+      armOptions: { scanCurrent: false },
+    };
+    const runtimeSetupOptions = Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY) || {};
+    const mergedSetupOptions = mergeLiveA11ySetupOptions(setupOptions, runtimeSetupOptions);
+    const resolvedSetupOptions = resolveLiveA11yMonitorInstallOptions(mergedSetupOptions);
+
+    attachLiveA11yMonitor(store, resolvedSetupOptions);
+    return originalFn(...args).then(async (win) => {
+      if (!win.__liveA11yMonitor) {
+        throw new Error('Live a11y monitor is not installed on window. Call cy.setupLiveA11yMonitor() before running scans.');
+      }
+
+      await win.__liveA11yMonitor.runInitialFullPageScan(initialScan?.axeOptions);
+
+      if (resolvedCommandOptions?.armAfter) {
+        win.__liveA11yMonitor.arm(
+          resolvedCommandOptions.armOptions || { scanCurrent: false }
+        );
+      }
+
+      return win;
+    });
+  });
+  isLiveA11yVisitOverwriteInstalled = true;
+};
+
+/**
+ * Registers global hooks once (from cypress/support/e2e.js) for low-instrumentation
+ * live a11y checks. It also patches cy.visit() so initial scan + arm happens after
+ * each navigation.
+ * @param {object} [options]
+ */
+export const registerLiveA11yAutoLifecycle = (options = {}) => {
+  const {
+    setupOptions = {
+      observerOptions: { fallbackFullPageScan: { enabled: false } },
+    },
+    initialScan = {
+      axeOptions: undefined,
+      commandOptions: { armAfter: true, armOptions: { scanCurrent: false } },
+    },
+    waitForIdleOptions = { quietMs: 500, timeoutMs: 8000 },
+    reportOptions = {},
+    failTestOnValidationError = true,
+    failRunOnValidationError = true,
+    stopMonitorAfterEach = true,
+  } = options;
+  const pendingValidationFailuresByTest = new Map();
+
+  ensureLiveA11yVisitOverwrite({ setupOptions, initialScan });
+
+  afterEach(function liveA11yAutoAfterEach() {
+    const titlePath = typeof this.currentTest?.titlePath === 'function'
+      ? this.currentTest.titlePath()
+      : this.currentTest?.titlePath;
+    const testKey =
+      (Array.isArray(titlePath) ? titlePath.join(' > ') : undefined) ||
+      this.currentTest?.fullTitle?.() ||
+      this.currentTest?.title ||
+      'unknown-test';
+    const runtimeReportOptions = Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY) || {};
+    Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY, undefined);
+    Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY, undefined);
+    const resolvedReportOptions = {
+      ...reportOptions,
+      ...runtimeReportOptions,
+      validation: {
+        ...(reportOptions.validation || {}),
+        ...(runtimeReportOptions.validation || {}),
+      },
+    };
+    cy.waitForLiveA11yIdle(waitForIdleOptions).then(
+      () => null,
+      (error) => {
+        Cypress.log({
+          name: '⚠ LIVE A11Y IDLE TIMEOUT',
+          message: `Proceeding after idle wait failure for test "${testKey}"`,
+          consoleProps: () => ({
+            test: testKey,
+            waitForIdleOptions,
+            error: error?.message || String(error),
+          }),
+        });
+        return null;
+      }
+    );
+    cy.reportLiveA11yResults({
+      ...resolvedReportOptions,
+      // Avoid hook throw. We fail the test directly below.
+      throwOnValidationFailure: false,
+    }).then((report) => {
+      const failCount = Number(report?.counts?.groupedByDisposition?.fail || 0);
+      const warnCount = Number(report?.counts?.groupedByDisposition?.warn || 0);
+      if (report?.validation?.valid) {
+        pendingValidationFailuresByTest.delete(testKey);
+        logLiveA11yValidationMarker({
+          testKey,
+          reportPath: report?.reportArtifact?.relativePath || report?.savedTo || 'unknown report path',
+          failCount,
+          warnCount,
+          isValid: true,
+        });
+        return;
+      }
+      const validationErrors = Array.isArray(report?.validation?.errors)
+        ? report.validation.errors
+        : ['Unknown validation error'];
+      const reportPath = report?.reportArtifact?.relativePath || report?.savedTo || 'unknown report path';
+      const message = `Live a11y validation failed for this test:\n- ${validationErrors.join('\n- ')}\nReport: ${reportPath}`;
+      pendingValidationFailuresByTest.set(testKey, {
+        testKey,
+        message,
+        reportPath,
+        validationErrors,
+        failCount,
+      });
+      logLiveA11yValidationMarker({
+        testKey,
+        reportPath,
+        validationErrors,
+        failCount,
+        warnCount,
+        markedFailed: Boolean(failTestOnValidationError),
+      });
+      if (!failTestOnValidationError) {
+        return;
+      }
+      markTestAsFailedWithoutThrowingHook(this, message, report);
+    });
+    if (stopMonitorAfterEach) {
+      cy.stopLiveA11yMonitor();
+    }
+  });
+
+  after(() => {
+    if (!failRunOnValidationError || pendingValidationFailuresByTest.size === 0) {
+      return;
+    }
+    Cypress.log({
+      name: '⛔ LIVE A11Y STRICT MODE',
+      message: '════════════ FINAL RUN FAILURE (STRICT MODE) ════════════',
+      consoleProps: () => ({
+        failingTests: [...pendingValidationFailuresByTest.keys()],
+        totalFailingTests: pendingValidationFailuresByTest.size,
+      }),
+    });
+    const details = [...pendingValidationFailuresByTest.values()]
+      .map((entry) => `- ${entry.testKey}\n  ${entry.message.replace(/\n/g, '\n  ')}`)
+      .join('\n');
+    throw new Error(
+      `Live a11y strict mode detected validation failures in ${pendingValidationFailuresByTest.size} test(s):\n${details}`
+    );
+  });
+};

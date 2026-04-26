@@ -17,11 +17,107 @@ const TEST_SELECTOR_ATTRIBUTES = [
 const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = "cypress/accessibility";
 const DEFAULT_ACCESSIBILITY_REPORT_FILE_NAME = "accessibility-results.json";
 const DEFAULT_ACCESSIBILITY_REPORT_PATH = `${DEFAULT_ACCESSIBILITY_RESULTS_FOLDER}/${DEFAULT_ACCESSIBILITY_REPORT_FILE_NAME}`;
+const IMPACT_LEVEL_SET = new Set(SEVERITY_ORDER);
+const TECHNICAL_METRIC_ORDER = [
+  "initialViolationsRaw",
+  "liveDistinctViolationInstancesExcludingInitial",
+  "totalViolationsInitialPlusLiveDistinct",
+  "initialDistinctNodesWithIssues",
+  "liveDistinctNodesWithIssuesExcludingInitial",
+  "totalNodesInitialPlusLiveDistinct",
+  "liveScansCaptured",
+  "monitorDroppedScans",
+  "monitorErrors",
+  "duplicatedViolationsFromEarlierReports",
+  "duplicatedNodesFromEarlierReports",
+  "previousReportsInSpec",
+];
+const TECHNICAL_METRIC_HELP = {
+  initialViolationsRaw: {
+    label: "Initial full-page violations (raw rule groups)",
+    description:
+      "How many violation rule groups axe found in the first full-page scan.",
+    related: ["liveDistinctViolationInstancesExcludingInitial", "totalViolationsInitialPlusLiveDistinct"],
+  },
+  liveDistinctViolationInstancesExcludingInitial: {
+    label: "Live distinct violations (excluding initial)",
+    description:
+      "How many NEW live violation groups were found, counted by rule + page, excluding groups already seen in the initial full-page scan.",
+    related: ["initialViolationsRaw", "totalViolationsInitialPlusLiveDistinct"],
+  },
+  totalViolationsInitialPlusLiveDistinct: {
+    label: "Total violations (initial + live distinct)",
+    description:
+      "Overall grouped violation total for this report: initial full-page rule groups + new live rule groups (excluding initial overlaps).",
+    related: ["initialViolationsRaw", "liveDistinctViolationInstancesExcludingInitial"],
+  },
+  initialDistinctNodesWithIssues: {
+    label: "Initial distinct nodes with issues",
+    description:
+      "How many unique elements had issues in the initial full-page scan.",
+    related: ["liveDistinctNodesWithIssuesExcludingInitial", "totalNodesInitialPlusLiveDistinct"],
+  },
+  liveDistinctNodesWithIssuesExcludingInitial: {
+    label: "Live distinct nodes (excluding initial)",
+    description:
+      "How many NEW unique elements had issues in live scans, excluding elements already seen in the initial full-page scan.",
+    related: ["initialDistinctNodesWithIssues", "totalNodesInitialPlusLiveDistinct"],
+  },
+  totalNodesInitialPlusLiveDistinct: {
+    label: "Total nodes (initial + live distinct)",
+    description:
+      "Overall unique-node total: initial distinct nodes + new live distinct nodes (excluding initial overlaps).",
+    related: ["initialDistinctNodesWithIssues", "liveDistinctNodesWithIssuesExcludingInitial"],
+  },
+  liveScansCaptured: {
+    label: "Live scans",
+    description:
+      "How many live/delta scans were actually executed while monitoring dynamic changes.",
+    related: ["monitorDroppedScans", "monitorErrors"],
+  },
+  monitorDroppedScans: {
+    label: "Dropped scans",
+    description:
+      "How many queued live scan attempts were dropped by the monitor queue logic.",
+    related: ["liveScansCaptured", "monitorErrors"],
+  },
+  monitorErrors: {
+    label: "Monitor errors",
+    description:
+      "Internal monitor runtime errors (engine/scan pipeline issues), not accessibility violations.",
+    related: ["liveScansCaptured", "monitorDroppedScans"],
+  },
+  duplicatedViolationsFromEarlierReports: {
+    label: "Duplicated grouped violations from earlier reports",
+    description:
+      "How many grouped violations (rule + page) in this report were already detected in earlier reports in the same spec file.",
+    related: ["duplicatedNodesFromEarlierReports", "previousReportsInSpec"],
+  },
+  duplicatedNodesFromEarlierReports: {
+    label: "Duplicated nodes from earlier reports",
+    description:
+      "How many node+page targets in this report were already seen in earlier reports in the same spec file.",
+    related: ["duplicatedViolationsFromEarlierReports", "previousReportsInSpec"],
+  },
+  previousReportsInSpec: {
+    label: "Previous reports in this spec",
+    description:
+      "How many reports were already emitted in this spec before this one. First report is 0.",
+    related: ["duplicatedViolationsFromEarlierReports", "duplicatedNodesFromEarlierReports"],
+  },
+};
 
 const severityRank = (impact) => {
   const normalized = String(impact || "").toLowerCase();
   const index = SEVERITY_ORDER.indexOf(normalized);
   return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+};
+
+const normalizeSeverities = (values) => {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values.map((severity) => String(severity || "").toLowerCase()))].filter((severity) =>
+    IMPACT_LEVEL_SET.has(severity)
+  );
 };
 
 const escapeSelectorAttrValue = (value) =>
@@ -107,6 +203,24 @@ const normalizePageUrlKey = (u) => {
   return s;
 };
 
+const buildNodeIdentityKey = (target, pageUrl) =>
+  `${String(target || "<unknown>")}@@${normalizePageUrlKey(pageUrl)}`;
+
+const buildRulePageKey = (ruleId, pageUrl) =>
+  `${String(ruleId || "<unknown-rule>")}@@${normalizePageUrlKey(pageUrl)}`;
+
+const buildRulePageKeysFromEntry = (entry) => {
+  const pages = new Set(
+    (entry?.nodeDetails || [])
+      .map((node) => normalizePageUrlKey(node?.pageUrl))
+      .filter((value) => value !== "")
+  );
+  if (pages.size === 0) {
+    return [buildRulePageKey(entry?.id, "")];
+  }
+  return [...pages].map((pageUrl) => buildRulePageKey(entry?.id, pageUrl));
+};
+
 const sameNodeIdentity = (a, b) => {
   const ta = a?.rawTarget || a?.target || "<unknown>";
   const tb = b?.rawTarget || b?.target || "<unknown>";
@@ -172,15 +286,53 @@ const formatLiveScanSourceLabel = (scan) => {
   return `Live · ${typePretty} · live-axe root #${monId}`;
 };
 
-const getConfiguredSeverities = (results) => {
-  const configured = results?.meta?.analysis?.configuredImpactLevels;
-  if (!Array.isArray(configured) || configured.length === 0) {
-    return [...SEVERITY_ORDER];
+const getConfiguredImpactPolicy = (results) => {
+  const analysis = results?.meta?.analysis || {};
+  const hasExplicitIncluded = Object.prototype.hasOwnProperty.call(
+    analysis,
+    "configuredIncludedImpactLevels"
+  );
+  const hasExplicitWarn = Object.prototype.hasOwnProperty.call(
+    analysis,
+    "configuredWarnImpactLevels"
+  );
+  const hasLegacyConfigured = Object.prototype.hasOwnProperty.call(
+    analysis,
+    "configuredImpactLevels"
+  );
+  const hasExplicitPolicy = hasExplicitIncluded || hasExplicitWarn || hasLegacyConfigured;
+  const explicitIncluded = normalizeSeverities(analysis.configuredIncludedImpactLevels);
+  const explicitWarn = normalizeSeverities(analysis.configuredWarnImpactLevels);
+  const legacyConfigured = normalizeSeverities(analysis.configuredImpactLevels);
+
+  const included = hasExplicitIncluded ? explicitIncluded : legacyConfigured;
+  const includedSet = new Set(included);
+  const warnBase = hasExplicitWarn ? explicitWarn : [];
+  const warn = warnBase.filter((severity) => !includedSet.has(severity));
+  const considered = [...new Set([...included, ...warn])];
+
+  if (considered.length === 0 && !hasExplicitPolicy) {
+    return {
+      included: [...SEVERITY_ORDER],
+      warn: [],
+      considered: [...SEVERITY_ORDER],
+    };
   }
 
-  const configuredSet = new Set(configured.map((severity) => String(severity).toLowerCase()));
-  const filtered = SEVERITY_ORDER.filter((severity) => configuredSet.has(severity));
-  return filtered.length > 0 ? filtered : [...SEVERITY_ORDER];
+  return {
+    included,
+    warn,
+    considered,
+  };
+};
+
+const getConfiguredSeverities = (results) => {
+  const configured = getConfiguredImpactPolicy(results).considered;
+  if (configured.length === 0) {
+    return [];
+  }
+  const configuredSet = new Set(configured);
+  return SEVERITY_ORDER.filter((severity) => configuredSet.has(severity));
 };
 
 const toViolationDetails = (results) => {
@@ -337,22 +489,56 @@ const groupViolations = (violationDetails) => {
 const buildLiveA11yReport = (results) => {
   const violationDetails = toViolationDetails(results);
   const configuredSeverities = getConfiguredSeverities(results);
+  const impactPolicy = getConfiguredImpactPolicy(results);
+  const failSeverities = new Set(impactPolicy.included);
+  const warnSeverities = new Set(impactPolicy.warn);
   const groupedViolations = groupViolations(violationDetails).filter((violation) =>
     configuredSeverities.includes(String(violation?.impact || "").toLowerCase())
-  );
+  ).map((violation) => {
+    const severity = String(violation?.impact || "").toLowerCase();
+    const disposition = failSeverities.has(severity)
+      ? "fail"
+      : warnSeverities.has(severity)
+        ? "warn"
+        : "fail";
+    return {
+      ...violation,
+      disposition,
+    };
+  });
   const initialNodesWithViolations = new Set(
     violationDetails
       .filter((entry) => entry.phase === "initial")
-      .flatMap((entry) => entry.nodeDetails || [])
-      .map((node) => node?.target)
+      .flatMap((entry) =>
+        (entry.nodeDetails || []).map((node) => buildNodeIdentityKey(node?.target, node?.pageUrl))
+      )
       .filter(Boolean)
   );
   const liveNodesWithViolations = new Set(
     violationDetails
       .filter((entry) => entry.phase === "live")
-      .flatMap((entry) => entry.nodeDetails || [])
-      .map((node) => node?.target)
+      .flatMap((entry) =>
+        (entry.nodeDetails || []).map((node) => buildNodeIdentityKey(node?.target, node?.pageUrl))
+      )
       .filter(Boolean)
+  );
+  const liveDistinctNodesWithIssuesExcludingInitial = new Set(
+    [...liveNodesWithViolations].filter((key) => !initialNodesWithViolations.has(key))
+  );
+  const initialRulePageKeys = new Set(
+    violationDetails
+      .filter((entry) => entry.phase === "initial")
+      .flatMap((entry) => buildRulePageKeysFromEntry(entry))
+      .filter(Boolean)
+  );
+  const liveRulePageKeys = new Set(
+    violationDetails
+      .filter((entry) => entry.phase === "live")
+      .flatMap((entry) => buildRulePageKeysFromEntry(entry))
+      .filter(Boolean)
+  );
+  const liveDistinctViolationGroupsExcludingInitial = new Set(
+    [...liveRulePageKeys].filter((key) => !initialRulePageKeys.has(key))
   );
   const liveViolationIds = new Set(
     violationDetails
@@ -360,9 +546,28 @@ const buildLiveA11yReport = (results) => {
       .map((entry) => entry.id)
   );
   const countsBySeverity = configuredSeverities.reduce((acc, severity) => {
-    acc[severity] = groupedViolations.filter((v) => v.impact === severity).length;
+    acc[severity] = groupedViolations.filter(
+      (v) => String(v?.impact || "").toLowerCase() === severity
+    ).length;
     return acc;
   }, {});
+  const groupedBySeverityDisposition = configuredSeverities.reduce((acc, severity) => {
+    const bySeverity = groupedViolations.filter(
+      (violation) => String(violation?.impact || "").toLowerCase() === severity
+    );
+    const fail = bySeverity.filter((violation) => violation.disposition === "fail").length;
+    const warn = bySeverity.filter((violation) => violation.disposition === "warn").length;
+    acc[severity] = {
+      fail,
+      warn,
+      sectionType: fail > 0 ? "violation" : warn > 0 ? "warning" : "none",
+    };
+    return acc;
+  }, {});
+  const groupedByDisposition = {
+    fail: groupedViolations.filter((violation) => violation.disposition === "fail").length,
+    warn: groupedViolations.filter((violation) => violation.disposition === "warn").length,
+  };
 
   return {
     generatedAt: new Date().toISOString(),
@@ -375,10 +580,21 @@ const buildLiveA11yReport = (results) => {
       liveScans: results?.live?.length || 0,
       liveViolations: liveViolationIds.size,
       liveNodesWithViolations: liveNodesWithViolations.size,
+      liveDistinctViolationInstancesExcludingInitial:
+        liveDistinctViolationGroupsExcludingInitial.size,
+      liveDistinctNodesWithIssuesExcludingInitial:
+        liveDistinctNodesWithIssuesExcludingInitial.size,
+      totalNodesInitialPlusLiveDistinct:
+        initialNodesWithViolations.size + liveDistinctNodesWithIssuesExcludingInitial.size,
+      totalViolationsInitialPlusLiveDistinct:
+        (results?.initial?.violations?.length || 0) + liveDistinctViolationGroupsExcludingInitial.size,
       groupedViolations: groupedViolations.length,
       groupedBySeverity: countsBySeverity,
+      groupedBySeverityDisposition,
+      groupedByDisposition,
     },
     severityOrder: configuredSeverities,
+    impactPolicy,
     groupedViolations,
     raw: results,
   };
@@ -393,6 +609,7 @@ const validateLiveA11yReport = (report, validation = {}) => {
     minUniqueLiveRuleIds: 0,
     requiredLiveRuleIds: [],
     minGroupedBySeverity: {},
+    failOnIncludedImpacts: true,
     ...validation,
   };
 
@@ -449,6 +666,22 @@ const validateLiveA11yReport = (report, validation = {}) => {
     }
   });
 
+  if (options.failOnIncludedImpacts) {
+    const failCount = Number(report?.counts?.groupedByDisposition?.fail || 0);
+    if (failCount > 0) {
+      const failSummary = (report?.groupedViolations || [])
+        .filter((violation) => violation.disposition === "fail")
+        .map((violation) => `${violation.id} (${violation.impact})`)
+        .slice(0, 8);
+      const extra = failSummary.length > 0
+        ? ` Top failing grouped rules: ${failSummary.join(", ")}${failCount > failSummary.length ? ", ..." : ""}.`
+        : "";
+      issues.push(
+        `Found ${failCount} grouped violations in failing impacts.${extra}`
+      );
+    }
+  }
+
   return {
     valid: issues.length === 0,
     errors: issues,
@@ -493,6 +726,83 @@ const attachReportArtifact = (outputPath, absolutePath, reportMeta) => {
   };
 };
 
+const buildCrossReportDuplicateStats = (groupedViolations = []) => {
+  const duplicateGroupedViolationKeys = new Set();
+  const duplicateNodeKeys = new Set();
+
+  (Array.isArray(groupedViolations) ? groupedViolations : []).forEach((violation) => {
+    const ruleId = String(violation?.id || "<unknown-rule>");
+    (Array.isArray(violation?.nodeDetails) ? violation.nodeDetails : []).forEach((node) => {
+      if (!node?.repeatedFromEarlierReport) {
+        return;
+      }
+      const target = node?.rawTarget || node?.target;
+      const nodeKey = buildNodeIdentityKey(target, node?.pageUrl);
+      duplicateNodeKeys.add(nodeKey);
+      duplicateGroupedViolationKeys.add(buildRulePageKey(ruleId, node?.pageUrl));
+    });
+  });
+
+  return {
+    duplicatedViolationsFromEarlierReports: duplicateGroupedViolationKeys.size,
+    duplicatedNodesFromEarlierReports: duplicateNodeKeys.size,
+  };
+};
+
+const buildReportSummary = (payload = {}) => {
+  const artifact = payload.reportArtifact || {};
+  const counts = payload.counts || {};
+  const monitorMeta = payload.meta || {};
+  const duplicateStats = buildCrossReportDuplicateStats(payload.groupedViolations);
+  const reportEmissionInSpec = Number(artifact.reportEmissionInSpec || 0);
+  const generatedLocal = payload.generatedAt
+    ? new Date(payload.generatedAt).toLocaleString(undefined, {
+      dateStyle: "full",
+      timeStyle: "medium",
+    })
+    : "—";
+  const technicalMetrics = {
+    initialViolationsRaw: Number(counts.initialViolations || 0),
+    liveDistinctViolationInstancesExcludingInitial: Number(
+      counts.liveDistinctViolationInstancesExcludingInitial || 0
+    ),
+    totalViolationsInitialPlusLiveDistinct: Number(
+      counts.totalViolationsInitialPlusLiveDistinct || 0
+    ),
+    initialDistinctNodesWithIssues: Number(counts.initialNodesWithViolations || 0),
+    liveDistinctNodesWithIssuesExcludingInitial: Number(
+      counts.liveDistinctNodesWithIssuesExcludingInitial || 0
+    ),
+    totalNodesInitialPlusLiveDistinct: Number(
+      counts.totalNodesInitialPlusLiveDistinct || 0
+    ),
+    liveScansCaptured: Number(counts.liveScans || 0),
+    monitorDroppedScans: Number(monitorMeta.dropped || 0),
+    monitorErrors: Number((payload.errors || []).length || 0),
+    duplicatedViolationsFromEarlierReports: Number(
+      duplicateStats.duplicatedViolationsFromEarlierReports || 0
+    ),
+    duplicatedNodesFromEarlierReports: Number(
+      duplicateStats.duplicatedNodesFromEarlierReports || 0
+    ),
+    previousReportsInSpec: Math.max(0, reportEmissionInSpec > 0 ? reportEmissionInSpec - 1 : 0),
+  };
+
+  return {
+    identity: {
+      reportId: artifact.reportId || "—",
+      specFile: artifact.specFile || "—",
+      cypressTest: artifact.testTitle || "—",
+      testInSuite: artifact.testOrdinalLabel || "—",
+      generatedLocal,
+      reportFileJson: artifact.fileName || "—",
+    },
+    technicalOrder: TECHNICAL_METRIC_ORDER,
+    technicalMetrics,
+    metricHelp: TECHNICAL_METRIC_HELP,
+  };
+};
+
 const registerLiveA11yReporterTasks = (on) => {
   on("task", {
     "liveA11y:buildReport"({
@@ -501,6 +811,7 @@ const registerLiveA11yReporterTasks = (on) => {
       validation = {},
       reportMeta = undefined,
       repeatInfo = undefined,
+      deferValidationFailure = false,
     }) {
       const report = buildLiveA11yReport(results);
       enrichNodesWithCrossReportRepeat(report.groupedViolations, repeatInfo);
@@ -509,11 +820,13 @@ const registerLiveA11yReporterTasks = (on) => {
       const payload = {
         ...report,
         reportArtifact: attachReportArtifact(outputPath, absolutePath, reportMeta),
+        summary: undefined,
         footnote: {
           text: A11Y_REPORT_DISCLAIMER,
           lines: A11Y_REPORT_DISCLAIMER_LINES,
         },
       };
+      payload.summary = buildReportSummary(payload);
       const savedTo = writeJson(outputPath, payload);
       const savedHtmlTo = writeLiveA11yHtmlReport(outputPath, {
         ...payload,
@@ -524,9 +837,9 @@ const registerLiveA11yReporterTasks = (on) => {
         .replace(/\\/g, "/")
         .replace(/\.json$/i, ".html");
 
-      if (!validationResult.valid) {
+      if (!validationResult.valid && !deferValidationFailure) {
         throw new Error(
-          `Live axe validation failed:\n- ${validationResult.errors.join("\n- ")}`
+          `Live a11y validation failed:\n- ${validationResult.errors.join("\n- ")}`
         );
       }
 
