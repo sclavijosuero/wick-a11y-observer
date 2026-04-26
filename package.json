@@ -1,0 +1,46 @@
+{
+  "name": "wick-a11y-observer",
+  "version": "1.0.0-alpha.0",
+  "description": "Cypress plugin: observe DOM changes, scan for a11y issues, and report them during tests.",
+  "main": "src/a11y-observer-commands.js",
+  "types": "src/a11y-observer-commands.d.ts",
+  "scripts": {
+    "cypress:open": "cypress open --e2e --browser chrome",
+    "cypress:run": "cypress run --browser chrome",
+    "serve:page": "http-server \"assets/pages\" -p 4173 -c-1",
+    "cypress:open:pages": "start-server-and-test \"npm run serve:page\" http://127.0.0.1:4173 \"cypress open --config baseUrl=http://127.0.0.1:4173 --e2e --browser chrome\"",
+    "cypress:run:pages": "start-server-and-test \"npm run serve:page\" http://127.0.0.1:4173 \"cypress run --config baseUrl=http://127.0.0.1:4173 --browser chrome\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sclavijosuero/wick-a11y-observer.git"
+  },
+  "keywords": [
+    "accessibility",
+    "a11y",
+    "wcag",
+    "cypress",
+    "testing",
+    "screen-reader",
+    "assistive-technology",
+    "automation",
+    "axe",
+    "axe-core",
+    "wick-a11y"
+  ],
+  "author": "Sebastian Clavijo Suero",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/sclavijosuero/wick-a11y-observer/issues"
+  },
+  "homepage": "https://github.com/sclavijosuero/wick-a11y-observer#readme",
+  "devDependencies": {
+    "cypress": "^15.7.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "cypress": "^15.14.1",
+    "axe-core": "^4.11.3",
+    "http-server": "^14.1.1",
+    "start-server-and-test": "^3.0.0"  }
+}

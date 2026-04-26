@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Axe Monitor Playground</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: #f7f7f8;
+      color: #222;
+    }
+
+    h1,
+    h2 {
+      margin-top: 0;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+
+    button {
+      padding: 10px 14px;
+      border: 1px solid #bbb;
+      background: white;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    .panel {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      padding: 16px;
+      margin-top: 16px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .fade-in {
+      opacity: 0;
+      transition: opacity 350ms ease;
+    }
+
+    .fade-in.visible {
+      opacity: 1;
+    }
+
+    .dialog-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .dialog {
+      width: 420px;
+      max-width: 90vw;
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
+    }
+
+    .lmenu {
+      position: absolute;
+      top: 140px;
+      left: 24px;
+      min-width: 220px;
+      background: white;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 8px 0;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+      z-index: 900;
+    }
+
+    .lmenu [role="menuitem"] {
+      display: block;
+      width: 100%;
+      text-align: left;
+      border: 0;
+      background: none;
+      padding: 10px 14px;
+    }
+
+    .ltoast-region {
+      position: fixed;
+      right: 16px;
+      bottom: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      z-index: 1100;
+    }
+
+    .ltoast {
+      min-width: 280px;
+      background: #222;
+      color: white;
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    .bad-contrast-toast {
+      color: #ddd;
+      background: #fff;
+      padding: 8px;
+      border-radius: 4px;
+    }
+
+    .ldrawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 340px;
+      max-width: 90vw;
+      height: 100vh;
+      background: white;
+      border-left: 1px solid #ddd;
+      box-shadow: -10px 0 25px rgba(0, 0, 0, 0.14);
+      padding: 20px;
+      z-index: 1000;
+      transform: translateX(100%);
+      transition: transform 300ms ease;
+    }
+
+    .ldrawer[data-state="open"] {
+      transform: translateX(0);
+    }
+
+    .bad-contrast {
+      color: #ddd;
+      background: #fff;
+      padding: 8px;
+      border-radius: 4px;
+    }
+
+    .bad-focus:focus {
+      outline: none;
+    }
+
+    .spacer {
+      height: 20px;
+    }
+  </style>
+</head>
+
+<body>
+  <h1 data-cy="monitor-page-title">Live Axe Monitor Playground</h1>
+  <p>
+    Use these controls to create dynamic UI after the initial page scan. This
+    page intentionally includes a few accessibility problems so your monitor
+    has something to catch.
+  </p>
+  <div class="toolbar panel">
+    <button id="open-dialog-btn" data-cy="open-dialog">
+      Open dialog after delay
+    </button>
+    <button id="open-menu-btn" data-cy="open-menu" aria-haspopup="menu" aria-expanded="false">
+      Open menu
+    </button>
+    <button id="show-toast-btn" data-cy="show-toast">Show toast</button>
+    <button id="open-drawer-btn" data-cy="open-drawer">Open drawer</button>
+    <button id="add-hidden-then-show-btn" data-cy="add-hidden-then-show">
+      Add hidden form, then show
+    </button>
+    <button id="open-popover-btn" data-cy="open-popover" popovertarget="help-popover">
+      Open native popover
+    </button>
+    <button id="show-brief-btn" data-cy="show-brief">
+      Show brief element
+    </button>
+    <button id="toggle-details-btn" data-cy="toggle-details">
+      Open details section
+    </button>
+    <button id="reveal-existing-issues-btn" data-cy="reveal-existing-issues">
+      Reveal existing DOM issues
+    </button>
+    <button id="inject-second-only-issues-btn" data-cy="inject-second-only-issues">
+      Inject second-test-only issues
+    </button>
+  </div>
+  <div class="panel">
+    <h2>Static content</h2>
+    <p>This is part of the initial whole-page scan.</p>
+    <details id="faq-details" data-cy="faq-details">
+      <summary>Show advanced options</summary>
+      <div class="spacer"></div>
+      <div role="region" aria-label="Advanced options">
+        <label>
+          Search <input type="text" placeholder="Search settings" />
+        </label>
+      </div>
+    </details>
+  </div>
+  <div class="panel">
+    <h2>Native popover target</h2>
+    <button id="popover-anchor" aria-describedby="help-popover">
+      Help trigger
+    </button>
+    <div id="help-popover" data-cy="help-popover" popover>
+      <p class="bad-contrast">This popover text has low contrast.</p>
+      <button class="bad-focus">Action without visible focus</button>
+    </div>
+  </div>
+  <section id="existing-issues-panel" class="panel hidden" data-open="false" data-state="closed" aria-hidden="true"
+    data-cy="existing-issues-panel">
+    <h2 id="existing-issues-title">Existing DOM issues (revealed later)</h2>
+    <p class="bad-contrast">
+      This section is in the DOM from initial render and becomes visible later.
+    </p>
+
+    <h3>Critical candidates</h3>
+    <img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" width="24" height="24" />
+    <button type="button">Action</button>
+    <input type="text" placeholder="Unlabeled profile field" />
+    <div role="checkbox">Receive updates</div>
+    <div role="menuitem">Detached menu item</div>
+    <div role="switch">Detached switch without aria-checked</div>
+    <div role="treeitem">Detached tree item</div>
+    <div role="radio">Detached radio without aria-checked</div>
+
+    <h3>Serious candidates</h3>
+    <a href="#missing-link-name"></a>
+    <iframe title="Preview frame"
+      srcdoc="<button type='button'></button><div role='switch'>Embedded switch</div>"></iframe>
+    <ul>
+      <div>Invalid list child</div>
+    </ul>
+
+    <h3>Moderate and minor candidates</h3>
+    <h5>Heading jumps from h3 to h5</h5>
+    <aside role="button">Landmark with invalid role</aside>
+    <div aria-hidden="true">
+      <button type="button">Focusable element inside aria-hidden</button>
+    </div>
+  </section>
+  <div id="dynamic-root"></div>
+  <div id="toast-region" class="ltoast-region" aria-live="polite" aria-atomic="true"></div>
+  <script>
+    const dynamicRoot = document.getElementById("dynamic-root");
+    const toastRegion = document.getElementById("toast-region");
+    const menuTrigger = document.getElementById("open-menu-btn");
+
+    const closeDialog = (backdrop) => {
+      if (!backdrop) return;
+      backdrop.setAttribute("data-state", "closed");
+      backdrop.classList.add("hidden");
+      setTimeout(() => backdrop.remove(), 200);
+    };
+
+    const closeDrawer = (drawer) => {
+      if (!drawer) return;
+      drawer.setAttribute("data-state", "closed");
+    };
+
+    const showToast = (title, subtitle = "", durationMs = 1000) => {
+      const existing = document.getElementById("standard-toast");
+      if (existing) {
+        existing.remove();
+      }
+      const toast = document.createElement("div");
+      toast.id = "standard-toast";
+      toast.setAttribute("data-cy", "standard-toast");
+      toast.className = "ltoast ltoast-standard fade-in";
+      toast.setAttribute("role", "status");
+      toast.innerHTML = subtitle
+        ? ` <strong>${title}</strong> <div class="bad-contrast-toast">${subtitle}</div> `
+        : ` <strong>${title}</strong> `;
+      toastRegion.appendChild(toast);
+
+      requestAnimationFrame(() => {
+        toast.classList.add("visible");
+      });
+
+      const fadeOutMs = 350;
+      const visibleForMs = Math.max(0, durationMs - fadeOutMs);
+      setTimeout(() => {
+        toast.classList.remove("visible");
+      }, visibleForMs);
+      setTimeout(() => {
+        toast.remove();
+      }, durationMs);
+    };
+
+    const closeMenu = (menu) => {
+      if (!menu) return;
+      menu.classList.remove("visible");
+      setTimeout(() => {
+        menu.remove();
+      }, 200);
+      if (menuTrigger) {
+        menuTrigger.setAttribute("aria-expanded", "false");
+      }
+    };
+
+    const showInaccessibleMenuToast = (selectedText) => {
+      const existing = document.getElementById("menu-selection-toast");
+      if (existing) {
+        existing.remove();
+      }
+      const toast = document.createElement("div");
+      toast.id = "menu-selection-toast";
+      toast.setAttribute("data-cy", "menu-selection-toast");
+      toast.className = "ltoast ltoast-menu fade-in";
+      toast.setAttribute("role", "status");
+      toast.innerHTML = ` <p class="bad-contrast">${selectedText}</p> <button type="button"></button> <a href="#menu-selection"></a> `;
+      toastRegion.appendChild(toast);
+
+      requestAnimationFrame(() => {
+        toast.classList.add("visible");
+      });
+
+      const durationMs = 750;
+      const fadeOutMs = 350;
+      const visibleForMs = Math.max(0, durationMs - fadeOutMs);
+      setTimeout(() => {
+        toast.classList.remove("visible");
+      }, visibleForMs);
+      setTimeout(() => {
+        toast.remove();
+      }, durationMs);
+    };
+    document
+      .getElementById("open-dialog-btn")
+      .addEventListener("click", () => {
+        const backdrop = document.createElement("div");
+        backdrop.className = "dialog-backdrop hidden";
+        backdrop.setAttribute("data-cy", "dialog-backdrop");
+        backdrop.setAttribute("data-state", "closed");
+        backdrop.innerHTML = ` <div class="dialog" data-cy="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" > <h2 id="dialog-title">Checkout confirmation</h2> <p class="bad-contrast">This text is intentionally low contrast.</p> <input data-cy="dialog-input" type="text" placeholder="Type here" aria-label=""> <button data-cy="dialog-continue" class="bad-focus">Continue</button> </div> `;
+        dynamicRoot.appendChild(backdrop);
+        setTimeout(() => {
+          backdrop.classList.remove("hidden");
+          backdrop.setAttribute("data-state", "open");
+        }, 500);
+      });
+    document
+      .getElementById("open-menu-btn")
+      .addEventListener("click", (e) => {
+        const btn = e.currentTarget;
+        dynamicRoot.querySelectorAll(".lmenu").forEach((menuEl) => menuEl.remove());
+        btn.setAttribute("aria-expanded", "true");
+        const menu = document.createElement("div");
+        menu.className = "lmenu fade-in";
+        menu.setAttribute("data-cy", "main-menu");
+        menu.setAttribute("role", "menu");
+        menu.setAttribute("aria-label", "Profile actions");
+        menu.innerHTML = ` <button data-cy="menu-item-view-profile" role="menuitem">View profile</button> <button data-cy="menu-item-billing-settings" role="menuitem">Billing settings</button> <button data-cy="menu-item-log-out" role="menuitem" class="bad-focus">Log out</button> `;
+        dynamicRoot.appendChild(menu);
+        requestAnimationFrame(() => {
+          menu.classList.add("visible");
+        });
+      });
+    document
+      .getElementById("show-toast-btn")
+      .addEventListener("click", () => {
+        showToast("Saved", "Your preferences were updated.", 4000);
+      });
+    document
+      .getElementById("open-drawer-btn")
+      .addEventListener("click", () => {
+        let drawer = document.querySelector(".ldrawer");
+        if (!drawer) {
+          drawer = document.createElement("aside");
+          drawer.className = "ldrawer";
+          drawer.setAttribute("data-cy", "drawer");
+          drawer.setAttribute("role", "dialog");
+          drawer.setAttribute("aria-modal", "true");
+          drawer.setAttribute("aria-labelledby", "drawer-title");
+          drawer.innerHTML = ` <h2 id="drawer-title">Account settings</h2> <label>Email <input type="email" value="test@example.com"></label> <div class="spacer"></div> <p class="bad-contrast">Drawer helper text with intentionally poor contrast.</p> <button type="button"></button> <a href="#drawer-link"></a> <div role="switch">Enable notifications</div> <input type="text" placeholder="Profile alias"> <button data-cy="drawer-save" class="bad-focus">Save changes</button> `;
+          dynamicRoot.appendChild(drawer);
+        }
+        requestAnimationFrame(() => {
+          drawer.setAttribute("data-state", "open");
+        });
+      });
+    dynamicRoot.addEventListener("click", (event) => {
+      const menuItem = event.target.closest(".lmenu [role='menuitem']");
+      if (menuItem) {
+        const menu = menuItem.closest(".lmenu");
+        const selectedText = menuItem.textContent?.trim() || "Menu option selected";
+        closeMenu(menu);
+        showInaccessibleMenuToast(selectedText);
+        return;
+      }
+
+      const continueBtn = event.target.closest(".dialog .bad-focus");
+      if (continueBtn) {
+        const backdrop = continueBtn.closest(".dialog-backdrop");
+        closeDialog(backdrop);
+        return;
+      }
+
+      const saveBtn = event.target.closest(".ldrawer .bad-focus");
+      if (saveBtn) {
+        const drawer = saveBtn.closest(".ldrawer");
+        closeDrawer(drawer);
+        return;
+      }
+
+      if (event.target.classList.contains("dialog-backdrop")) {
+        closeDialog(event.target);
+      }
+    });
+    document
+      .getElementById("add-hidden-then-show-btn")
+      .addEventListener("click", () => {
+        const wrapper = document.createElement("section");
+        wrapper.className = "panel hidden";
+        wrapper.setAttribute("data-open", "false");
+        wrapper.innerHTML = ` <h2 data-cy="late-form-title">Late loaded form</h2> <form> <label>Username <input type="text"></label> <div class="spacer"></div> <button class="bad-focus">Submit</button> </form> `;
+        dynamicRoot.appendChild(wrapper);
+        setTimeout(() => {
+          wrapper.classList.remove("hidden");
+          wrapper.setAttribute("data-open", "true");
+        }, 700);
+      });
+    document
+      .getElementById("show-brief-btn")
+      .addEventListener("click", () => {
+        const alertEl = document.createElement("div");
+        alertEl.className = "panel";
+        alertEl.setAttribute("data-cy", "brief-alert");
+        alertEl.setAttribute("role", "alert");
+        alertEl.textContent = "Brief alert that disappears quickly";
+        dynamicRoot.appendChild(alertEl);
+        setTimeout(() => {
+          alertEl.remove();
+        }, 150);
+      });
+    document
+      .getElementById("toggle-details-btn")
+      .addEventListener("click", () => {
+        document.getElementById("faq-details").open = true;
+      });
+    document
+      .getElementById("open-popover-btn")
+      .addEventListener("click", () => {
+        const pop = document.getElementById("help-popover");
+        if (typeof pop.showPopover === "function") {
+          pop.showPopover();
+        }
+      });
+    document
+      .getElementById("reveal-existing-issues-btn")
+      .addEventListener("click", () => {
+        const panel = document.getElementById("existing-issues-panel");
+        if (!panel) return;
+        panel.classList.remove("hidden");
+        panel.setAttribute("data-open", "true");
+        panel.setAttribute("data-state", "open");
+        panel.setAttribute("aria-hidden", "false");
+        panel.setAttribute("role", "dialog");
+        panel.setAttribute("aria-modal", "true");
+        panel.setAttribute("aria-labelledby", "existing-issues-title");
+      });
+    document
+      .getElementById("inject-second-only-issues-btn")
+      .addEventListener("click", () => {
+        const existing = document.getElementById("second-only-issues-panel");
+        if (existing) return;
+
+        const panel = document.createElement("section");
+        panel.id = "second-only-issues-panel";
+        panel.setAttribute("data-cy", "second-only-issues-panel");
+        panel.className = "panel";
+        panel.setAttribute("role", "dialog");
+        panel.setAttribute("aria-modal", "true");
+        panel.setAttribute("aria-label", "Second test only issues");
+        panel.setAttribute("data-open", "true");
+        panel.setAttribute("data-state", "open");
+        panel.innerHTML = ` <h2>Second test only issues</h2> <button type="button"></button> <iframe title="Second test embedded frame" srcdoc="<input type='text'><button type='button'></button>"></iframe> `;
+        dynamicRoot.appendChild(panel);
+      });
+    window.addEventListener("load", () => {
+      for (let i = 0; i < 5; i += 1) {
+        const temp = document.createElement("div");
+        temp.textContent = `Transient loading node ${i + 1}`;
+        temp.className = "hidden";
+        dynamicRoot.appendChild(temp);
+        setTimeout(() => temp.remove(), 100);
+      }
+    });
+  </script>
+</body>
+
+</html>
