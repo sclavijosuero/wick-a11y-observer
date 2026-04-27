@@ -162,11 +162,14 @@ const TECHNICAL_METRIC_HELP = {
   },
 };
 
-const buildTechnicalMetricOrder = (technicalMetrics = {}) => {
-  const hasIncompleteMetrics = INCOMPLETE_TECHNICAL_METRIC_ORDER.some(
+const buildTechnicalMetricOrder = (
+  technicalMetrics = {},
+  { includeIncompleteInReport = true } = {}
+) => {
+  const hasIncompleteMetrics = includeIncompleteInReport && INCOMPLETE_TECHNICAL_METRIC_ORDER.some(
     (key) => Number(technicalMetrics[key] || 0) > 0
   );
-  const hasIncompleteDuplicates = Number(
+  const hasIncompleteDuplicates = includeIncompleteInReport && Number(
     technicalMetrics.duplicatedIncompleteFindingsFromEarlierReports || 0
   ) > 0;
   return [
@@ -178,6 +181,41 @@ const buildTechnicalMetricOrder = (technicalMetrics = {}) => {
     "duplicatedNodesFromEarlierReports",
     "previousReportsInSpec",
   ];
+};
+
+const omitIncompleteField = (value) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const { incomplete, ...rest } = value;
+  return rest;
+};
+
+const stripIncompleteFindingsFromRawResults = (results) => {
+  if (!results || typeof results !== "object" || Array.isArray(results)) {
+    return results;
+  }
+  const nextResults = {
+    ...results,
+  };
+  if (nextResults.initial && typeof nextResults.initial === "object") {
+    nextResults.initial = omitIncompleteField(nextResults.initial);
+  }
+  if (Array.isArray(nextResults.live)) {
+    nextResults.live = nextResults.live.map((scan) => {
+      if (!scan || typeof scan !== "object" || Array.isArray(scan)) {
+        return scan;
+      }
+      const nextScan = {
+        ...scan,
+      };
+      if (nextScan.results && typeof nextScan.results === "object") {
+        nextScan.results = omitIncompleteField(nextScan.results);
+      }
+      return nextScan;
+    });
+  }
+  return nextResults;
 };
 
 const severityRank = (impact) => {
@@ -700,24 +738,29 @@ const buildLiveA11yReport = (results, options = {}) => {
     const fail = bySeverity.filter((violation) => violation.disposition === "fail").length;
     const warn = bySeverity.filter((violation) => violation.disposition === "warn").length;
     const incomplete = bySeverity.filter((violation) => violation.disposition === "incomplete").length;
+    const sectionType = fail > 0
+      ? "violation"
+      : warn > 0
+        ? "warning"
+        : includeIncompleteInReport && incomplete > 0
+          ? "incomplete"
+          : "none";
     acc[severity] = {
       fail,
       warn,
-      incomplete,
-      sectionType: fail > 0
-        ? "violation"
-        : warn > 0
-          ? "warning"
-          : incomplete > 0
-            ? "incomplete"
-            : "none",
+      ...(includeIncompleteInReport ? { incomplete } : {}),
+      sectionType,
     };
     return acc;
   }, {});
   const groupedByDisposition = {
     fail: groupedViolations.filter((violation) => violation.disposition === "fail").length,
     warn: groupedViolations.filter((violation) => violation.disposition === "warn").length,
-    incomplete: groupedViolations.filter((violation) => violation.disposition === "incomplete").length,
+    ...(includeIncompleteInReport
+      ? {
+        incomplete: groupedViolations.filter((violation) => violation.disposition === "incomplete").length,
+      }
+      : {}),
   };
   const groupedBySeverityIssues = configuredSeverities.reduce((acc, severity) => {
     const bySeverity = groupedViolations.filter(
@@ -728,13 +771,15 @@ const buildLiveA11yReport = (results, options = {}) => {
     ).length;
     return acc;
   }, {});
-  const groupedBySeverityIncomplete = configuredSeverities.reduce((acc, severity) => {
-    const bySeverity = groupedViolations.filter(
-      (violation) => String(violation?.impact || "").toLowerCase() === severity
-    );
-    acc[severity] = bySeverity.filter((violation) => violation.disposition === "incomplete").length;
-    return acc;
-  }, {});
+  const groupedBySeverityIncomplete = includeIncompleteInReport
+    ? configuredSeverities.reduce((acc, severity) => {
+      const bySeverity = groupedViolations.filter(
+        (violation) => String(violation?.impact || "").toLowerCase() === severity
+      );
+      acc[severity] = bySeverity.filter((violation) => violation.disposition === "incomplete").length;
+      return acc;
+    }, {})
+    : undefined;
   const groupedFindingsTotal = groupedViolations.length;
   const groupedIssuesTotal = groupedByDisposition.fail + groupedByDisposition.warn;
 
@@ -745,39 +790,43 @@ const buildLiveA11yReport = (results, options = {}) => {
     counts: {
       initialScans: results?.initial ? 1 : 0,
       initialViolations: results?.initial?.violations?.length || 0,
-      initialIncomplete: includeIncompleteInReport ? (results?.initial?.incomplete?.length || 0) : 0,
       initialNodesWithViolations: initialNodesWithViolations.size,
-      initialNodesWithIncomplete: initialNodesWithIncomplete.size,
       liveScans: results?.live?.length || 0,
       liveViolations: liveViolationIds.size,
-      liveIncomplete: liveIncompleteIds.size,
       liveNodesWithViolations: liveNodesWithViolations.size,
-      liveNodesWithIncomplete: liveNodesWithIncomplete.size,
       liveDistinctViolationInstancesExcludingInitial:
         liveDistinctViolationGroupsExcludingInitial.size,
-      liveDistinctIncompleteInstancesExcludingInitial:
-        liveDistinctIncompleteGroupsExcludingInitial.size,
       liveDistinctNodesWithIssuesExcludingInitial:
         liveDistinctNodesWithIssuesExcludingInitial.size,
-      liveDistinctNodesWithIncompleteExcludingInitial:
-        liveDistinctNodesWithIncompleteExcludingInitial.size,
       totalNodesInitialPlusLiveDistinct:
         initialNodesWithViolations.size + liveDistinctNodesWithIssuesExcludingInitial.size,
-      totalNodesIncompleteInitialPlusLiveDistinct:
-        initialNodesWithIncomplete.size + liveDistinctNodesWithIncompleteExcludingInitial.size,
       totalViolationsInitialPlusLiveDistinct:
         (results?.initial?.violations?.length || 0) + liveDistinctViolationGroupsExcludingInitial.size,
-      totalIncompleteInitialPlusLiveDistinct:
-        (includeIncompleteInReport ? (results?.initial?.incomplete?.length || 0) : 0) +
-        liveDistinctIncompleteGroupsExcludingInitial.size,
       groupedViolations: groupedIssuesTotal,
-      groupedIncomplete: groupedByDisposition.incomplete,
       groupedFindingsTotal,
       groupedBySeverity: countsBySeverity,
       groupedBySeverityIssues,
-      groupedBySeverityIncomplete,
+      ...(includeIncompleteInReport ? { groupedBySeverityIncomplete } : {}),
       groupedBySeverityDisposition,
       groupedByDisposition,
+      ...(includeIncompleteInReport
+        ? {
+          initialIncomplete: results?.initial?.incomplete?.length || 0,
+          initialNodesWithIncomplete: initialNodesWithIncomplete.size,
+          liveIncomplete: liveIncompleteIds.size,
+          liveNodesWithIncomplete: liveNodesWithIncomplete.size,
+          liveDistinctIncompleteInstancesExcludingInitial:
+            liveDistinctIncompleteGroupsExcludingInitial.size,
+          liveDistinctNodesWithIncompleteExcludingInitial:
+            liveDistinctNodesWithIncompleteExcludingInitial.size,
+          totalNodesIncompleteInitialPlusLiveDistinct:
+            initialNodesWithIncomplete.size + liveDistinctNodesWithIncompleteExcludingInitial.size,
+          totalIncompleteInitialPlusLiveDistinct:
+            (results?.initial?.incomplete?.length || 0) +
+            liveDistinctIncompleteGroupsExcludingInitial.size,
+          groupedIncomplete: groupedByDisposition.incomplete,
+        }
+        : {}),
     },
     severityOrder: configuredSeverities,
     impactPolicy,
@@ -785,7 +834,7 @@ const buildLiveA11yReport = (results, options = {}) => {
       includeIncompleteInReport,
     },
     groupedViolations,
-    raw: results,
+    raw: includeIncompleteInReport ? results : stripIncompleteFindingsFromRawResults(results),
   };
 };
 
@@ -950,6 +999,7 @@ const buildReportSummary = (payload = {}) => {
   const artifact = payload.reportArtifact || {};
   const counts = payload.counts || {};
   const monitorMeta = payload.meta || {};
+  const includeIncompleteInReport = payload?.reportOptions?.includeIncompleteInReport === true;
   const duplicateStats = buildCrossReportDuplicateStats(payload.groupedViolations);
   const reportEmissionInSpec = Number(artifact.reportEmissionInSpec || 0);
   const generatedLocal = payload.generatedAt
@@ -966,13 +1016,6 @@ const buildReportSummary = (payload = {}) => {
     totalViolationsInitialPlusLiveDistinct: Number(
       counts.totalViolationsInitialPlusLiveDistinct || 0
     ),
-    initialIncompleteRaw: Number(counts.initialIncomplete || 0),
-    liveDistinctIncompleteInstancesExcludingInitial: Number(
-      counts.liveDistinctIncompleteInstancesExcludingInitial || 0
-    ),
-    totalIncompleteInitialPlusLiveDistinct: Number(
-      counts.totalIncompleteInitialPlusLiveDistinct || 0
-    ),
     initialDistinctNodesWithIssues: Number(counts.initialNodesWithViolations || 0),
     liveDistinctNodesWithIssuesExcludingInitial: Number(
       counts.liveDistinctNodesWithIssuesExcludingInitial || 0
@@ -980,27 +1023,51 @@ const buildReportSummary = (payload = {}) => {
     totalNodesInitialPlusLiveDistinct: Number(
       counts.totalNodesInitialPlusLiveDistinct || 0
     ),
-    initialDistinctNodesWithIncomplete: Number(counts.initialNodesWithIncomplete || 0),
-    liveDistinctNodesWithIncompleteExcludingInitial: Number(
-      counts.liveDistinctNodesWithIncompleteExcludingInitial || 0
-    ),
-    totalNodesIncompleteInitialPlusLiveDistinct: Number(
-      counts.totalNodesIncompleteInitialPlusLiveDistinct || 0
-    ),
+    ...(includeIncompleteInReport
+      ? {
+        initialIncompleteRaw: Number(counts.initialIncomplete || 0),
+        liveDistinctIncompleteInstancesExcludingInitial: Number(
+          counts.liveDistinctIncompleteInstancesExcludingInitial || 0
+        ),
+        totalIncompleteInitialPlusLiveDistinct: Number(
+          counts.totalIncompleteInitialPlusLiveDistinct || 0
+        ),
+        initialDistinctNodesWithIncomplete: Number(counts.initialNodesWithIncomplete || 0),
+        liveDistinctNodesWithIncompleteExcludingInitial: Number(
+          counts.liveDistinctNodesWithIncompleteExcludingInitial || 0
+        ),
+        totalNodesIncompleteInitialPlusLiveDistinct: Number(
+          counts.totalNodesIncompleteInitialPlusLiveDistinct || 0
+        ),
+      }
+      : {}),
     liveScansCaptured: Number(counts.liveScans || 0),
     monitorDroppedScans: Number(monitorMeta.dropped || 0),
     monitorErrors: Number((payload.errors || []).length || 0),
     duplicatedViolationsFromEarlierReports: Number(
       duplicateStats.duplicatedViolationsFromEarlierReports || 0
     ),
-    duplicatedIncompleteFindingsFromEarlierReports: Number(
-      duplicateStats.duplicatedIncompleteFindingsFromEarlierReports || 0
-    ),
+    ...(includeIncompleteInReport
+      ? {
+        duplicatedIncompleteFindingsFromEarlierReports: Number(
+          duplicateStats.duplicatedIncompleteFindingsFromEarlierReports || 0
+        ),
+      }
+      : {}),
     duplicatedNodesFromEarlierReports: Number(
       duplicateStats.duplicatedNodesFromEarlierReports || 0
     ),
     previousReportsInSpec: Math.max(0, reportEmissionInSpec > 0 ? reportEmissionInSpec - 1 : 0),
   };
+  const technicalOrder = buildTechnicalMetricOrder(technicalMetrics, {
+    includeIncompleteInReport,
+  });
+  const metricHelp = technicalOrder.reduce((acc, metricKey) => {
+    if (TECHNICAL_METRIC_HELP[metricKey]) {
+      acc[metricKey] = TECHNICAL_METRIC_HELP[metricKey];
+    }
+    return acc;
+  }, {});
 
   return {
     identity: {
@@ -1011,9 +1078,9 @@ const buildReportSummary = (payload = {}) => {
       generatedLocal,
       reportFileJson: artifact.fileName || "—",
     },
-    technicalOrder: buildTechnicalMetricOrder(technicalMetrics),
+    technicalOrder,
     technicalMetrics,
-    metricHelp: TECHNICAL_METRIC_HELP,
+    metricHelp,
   };
 };
 
@@ -1026,6 +1093,7 @@ const registerLiveA11yReporterTasks = (on) => {
       reportMeta = undefined,
       repeatInfo = undefined,
       includeIncompleteInReport = false,
+      generateArtifacts = true,
       deferValidationFailure = false,
     }) {
       const report = buildLiveA11yReport(results, {
@@ -1044,15 +1112,19 @@ const registerLiveA11yReporterTasks = (on) => {
         },
       };
       payload.summary = buildReportSummary(payload);
-      const savedTo = writeJson(outputPath, payload);
-      const savedHtmlTo = writeLiveA11yHtmlReport(outputPath, {
-        ...payload,
-        validation: validationResult,
-      });
-
-      const htmlReportRelative = String(outputPath)
-        .replace(/\\/g, "/")
-        .replace(/\.json$/i, ".html");
+      let savedTo;
+      let savedHtmlTo;
+      let htmlReportRelative;
+      if (generateArtifacts !== false) {
+        savedTo = writeJson(outputPath, payload);
+        savedHtmlTo = writeLiveA11yHtmlReport(outputPath, {
+          ...payload,
+          validation: validationResult,
+        });
+        htmlReportRelative = String(outputPath)
+          .replace(/\\/g, "/")
+          .replace(/\.json$/i, ".html");
+      }
 
       if (!validationResult.valid && !deferValidationFailure) {
         throw new Error(

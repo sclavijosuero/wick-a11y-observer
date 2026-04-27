@@ -228,7 +228,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
 
     quietMs: 400,
     waitForIdleTimeoutMs: 10000,
-    maxQueueSize: 20,
+    maxQueueSize: 80,
 
     treatOpacityZeroAsHidden: true,
 

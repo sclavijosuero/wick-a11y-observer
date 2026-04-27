@@ -1,5 +1,3 @@
-import { registerLiveA11yAutoLifecycle } from '../../src/a11y-observer-commands.js';
-
 const standardsTags = {
   type: 'tag',
   values: [
@@ -69,26 +67,33 @@ const runTest3SecondaryOnlyFlow = () => {
 };
 
 
-registerLiveA11yAutoLifecycle({
-  setupOptions: {
-    observerOptions: {
-      fallbackFullPageScan: { enabled: false },
-      maxQueueSize: 80,
-    },
-  },
-  reportOptions: {
-    validation: {
-      failOnIncludedImpacts: true,
-    },
-  },
-});
 
 describe('live a11y auto lifecycle', () => {
+  // before(() => {
+  //   // Overrides setup options if wanted for what ever reason
+  //   cy.setLiveA11yAutoSetupOptions({
+  //     observerOptions: {
+  //       fallbackFullPageScan: { enabled: false },
+  //       maxQueueSize: 100,
+  //     },
+  //   });
+  //   // Overrides report options if wanted for what ever reason
+  //   cy.setLiveA11yAutoReportOptions({
+  //     validation: {
+  //       // failOnIncludedImpacts=false if you want the issues findings are still reported, but they won't fail validation by that specific rule.
+  //       failOnIncludedImpacts: false,
+  //     },
+  //   });
+  // });
+
   it('passes when all impacts are warning-only', () => {
+    // If you want to set thew analysis configuration specific for one test that is not the default one
+    // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
       initialAxeOptions: warnRunConfig,
       liveAxeOptions: warnRunConfig,
     });
+
 
     cy.visit('/live-axe-monitor-playground.html');
 
@@ -128,10 +133,13 @@ describe('live a11y auto lifecycle', () => {
   });
 
   it('fails this test when failing impacts are present', () => {
+    // If you want to set thew analysis configuration specific for one test that is not the default one
+    // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
       initialAxeOptions: failWarnRunConfig,
       liveAxeOptions: failWarnRunConfig,
     });
+
 
     cy.visit('/live-axe-monitor-playground.html');
     cy.get('[data-cy=monitor-page-title]').should('be.visible');
@@ -192,10 +200,14 @@ describe('live a11y auto lifecycle', () => {
   });
 
   it('still runs after the previous test fails', () => {
+    // If you want to set thew analysis configuration specific for one test that is not the default one
+    // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
+      runAccessibility: false,
       initialAxeOptions: allWarnRunConfig,
       liveAxeOptions: allWarnRunConfig,
     });
+
 
     cy.visit('/live-axe-monitor-playground.html');
     cy.get('[data-cy=monitor-page-title]').should('be.visible');
@@ -233,10 +245,13 @@ describe('live a11y auto lifecycle', () => {
   });
 
   it('fails this test when all four severities are included as failing impacts', () => {
+    // If you want to set thew analysis configuration specific for one test that is not the default one
+    // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
       initialAxeOptions: almostAllFailRunConfig,
       liveAxeOptions: almostAllFailRunConfig,
     });
+
 
     cy.visit('/live-axe-monitor-playground.html');
     cy.get('[data-cy=monitor-page-title]').should('be.visible');
@@ -265,5 +280,51 @@ describe('live a11y auto lifecycle', () => {
     cy.get('[data-cy=reveal-existing-issues]').click();
     cy.get('[data-cy=existing-issues-panel]').should('be.visible');
 
+  });
+
+  it('one-time manual scan after UI stabilizes', () => {
+    cy.visit('/live-axe-monitor-playground.html');
+    cy.get('[data-cy=monitor-page-title]').should('be.visible');
+
+    // Ensure known violations are visible at scan time.
+    cy.get('[data-cy=reveal-existing-issues]').click();
+    cy.get('[data-cy=existing-issues-panel]').should('be.visible');
+
+    // One-time manual checkpoint scan.
+    cy.checkAccessibility();
+  });
+
+  it.only('one-time manual scan with custom axe options', () => {
+    cy.visit('/live-axe-monitor-playground.html');
+    cy.get('[data-cy=monitor-page-title]').should('be.visible');
+
+    // Expose additional violations before the one-time scan.
+    cy.get('[data-cy=inject-second-only-issues]').click();
+    cy.get('[data-cy=second-only-issues-panel]').should('be.visible');
+    cy.get('[data-cy=reveal-existing-issues]').click();
+    cy.get('[data-cy=existing-issues-panel]').should('be.visible');
+
+    cy.checkAccessibility({
+      iframes: true,
+      includedImpacts: ['critical', 'serious'],
+      onlyWarnImpacts: ['moderate', 'minor'],
+      runOnly: standardsTags,
+      rules: {
+        // Example rule override for this one-time run.
+        'color-contrast': { enabled: false },
+      },
+    });
+
+    cy.checkAccessibility({
+      iframes: true,
+      includedImpacts: ['critical'],
+      onlyWarnImpacts: ['serious','moderate'],
+      runOnly: standardsTags,
+      rules: {
+        // Example rule override for this one-time run.
+        'color-contrast': { enabled: false },
+      },
+
+    });
   });
 });

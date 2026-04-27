@@ -3,7 +3,7 @@
 `wick-a11y-observer` registers custom commands under the Cypress namespace.
 
 This README documents:
-- all custom commands
+- public plugin commands
 - required vs optional params
 - supported options
 - defaults from source code
@@ -14,20 +14,17 @@ This README documents:
 Load the plugin commands in your Cypress support file:
 
 ```js
+// Installed package (recommended for consumers)
+import "wick-a11y-observer";
+```
+
+If you are developing inside this repository (local source import), use:
+
+```js
 import "../../src/a11y-observer-commands.js";
 ```
 
-Or use the one-time auto lifecycle helper (minimal test instrumentation):
-
-```js
-import { registerLiveA11yAutoLifecycle } from "../../src/a11y-observer-commands.js";
-
-registerLiveA11yAutoLifecycle({
-  setupOptions: {
-    observerOptions: { fallbackFullPageScan: { enabled: false } },
-  },
-});
-```
+Import automatically registers auto lifecycle hooks (no extra call required).
 
 Register the Node-side reporter task in `cypress.config.js`:
 
@@ -46,16 +43,14 @@ module.exports = {
 
 ---
 
-## Command Index
+## Public Command Index
 
-- `cy.setupLiveA11yMonitor(monitorOptions?)`
+Only the following commands are part of the public plugin API:
+
+- `cy.checkAccessibility(axeOptions?, commandOptions?)`
 - `cy.runInitialLiveA11yScan(axeOptions?, commandOptions?)`
-- `cy.armLiveA11yMonitor(options?)`
-- `cy.waitForLiveA11yIdle(options?)`
-- `cy.stopLiveA11yMonitor()`
-- `cy.getLiveA11yResults()`
-- `cy.reportLiveA11yResults(options?)`
-- `registerLiveA11yAutoLifecycle(options?)`
+- `cy.setLiveA11yAutoSetupOptions(options?)`
+- `cy.setLiveA11yAutoReportOptions(options?)`
 
 ---
 
@@ -73,7 +68,7 @@ All fields are optional.
 - `rules?: Record<string, unknown>`
 - additional unknown fields are allowed/passed through
 
-### Default scan profile used by `setupLiveA11yMonitor()`
+### Default scan profile
 
 - `resultTypes: ["violations", "incomplete"]`
 - `iframes: true`
@@ -82,73 +77,43 @@ All fields are optional.
 
 ---
 
-## `cy.setupLiveA11yMonitor(monitorOptions?)`
+## `cy.checkAccessibility(axeOptions?, commandOptions?)`
 
-Installs the live monitor in the AUT window, creates/aliases an internal store, and merges your initial/live axe options with the standard scan defaults.
+Runs a one-time manual full-page accessibility scan for the current page.
 
 ### Parameters
 
-- `monitorOptions` (optional)
-  - `initialAxeOptions?: LiveA11yRunOptions`
-  - `liveAxeOptions?: LiveA11yRunOptions`
-  - `observerOptions?: LiveA11yObserverOptions`
-  - `includeIncompleteInReport?: boolean` (default: `false`)
+- `axeOptions` (optional): `LiveA11yRunOptions`
+  - If omitted, uses monitor's configured `initialAxeOptions`.
+- `commandOptions` (optional):
+  - `waitForIdleBeforeScan?: boolean` (default: `true`)
+  - `waitForIdleOptions?: { quietMs?: number; timeoutMs?: number }` (default: `{ quietMs: 500, timeoutMs: 8000 }`)
 
 ### Returns
 
-- `Chainable<LiveA11yStore>`
-
-### Important defaults
-
-When called through this command, these defaults are applied before your overrides:
-
-- `autoArm: false`
-- `minVisibleMs: 250`
-- `stableFrames: 3`
-- `maxSettleMs: 2000`
-- `maxQueueSize: 20`
-- `useConventionRoots: false`
-- `liveAxeOptions.resultTypes: ["violations", "incomplete"]`
-
-Lower-level monitor defaults also include:
-
-- `quietMs: 400`
-- `waitForIdleTimeoutMs: 10000`
-- `treatOpacityZeroAsHidden: true`
-- `fallbackFullPageScan.enabled: true`
-- `fallbackFullPageScan.throttleMs: 1500`
-
-### Merge behavior
-
-- Initial scan options = `DEFAULT` + `initialAxeOptions`
-- Live scan options = `DEFAULT` + `liveAxeOptions`
+- `Chainable<void>`
 
 ### Example
 
 ```js
-cy.setupLiveA11yMonitor({
-  initialAxeOptions: {
-    runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] },
-    includedImpacts: ["critical", "serious", "moderate"],
-  },
-  liveAxeOptions: {
-    runOnly: { type: "tag", values: ["wcag2a", "wcag2aa"] },
-    includedImpacts: ["critical", "serious", "moderate"],
-    iframes: false,
-  },
-  observerOptions: {
-    fallbackFullPageScan: { enabled: false },
+cy.checkAccessibility({
+  includedImpacts: ["critical", "serious", "moderate", "minor"],
+  runOnly: {
+    type: "tag",
+    values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
   },
 });
 ```
 
-Use this for most projects because it keeps sane defaults while allowing targeted overrides.
+Use this command for one-time manual checkpoints. It does not arm additional live monitoring.
+It clears previously captured live entries before running the manual scan, so the checkpoint reflects the current one-time snapshot.
+When `axeOptions` includes impact or `runOnly` overrides, report policy metadata is synced for this test so severity sections reflect that manual configuration.
 
 ---
 
 ## `cy.runInitialLiveA11yScan(axeOptions?, commandOptions?)`
 
-Runs the initial full-page scan immediately.
+Runs the initial full-page scan and can optionally arm live monitoring.
 
 ### Parameters
 
@@ -180,14 +145,20 @@ This performs initial scan, then starts watching only future changes.
 
 ---
 
-## `cy.armLiveA11yMonitor(options?)`
+## `cy.setLiveA11yAutoSetupOptions(options?)`
 
-Arms the monitor so live changes are tracked/scanned.
+Sets runtime setup/observer options for the auto lifecycle in the current test.
 
 ### Parameters
 
-- `options` (optional): `ArmLiveA11yMonitorOptions`
-  - `scanCurrent?: boolean` (default: `false`)
+- `options` (optional): `SetupLiveA11yMonitorOptions`
+  - `initialAxeOptions?: LiveA11yRunOptions`
+  - `liveAxeOptions?: LiveA11yRunOptions`
+  - `observerOptions?: LiveA11yObserverOptions`
+  - `includeIncompleteInReport?: boolean`
+  - `generateReports?: boolean`
+  - `runAccessibility?: boolean`
+  - `skipAccessibility?: boolean`
 
 ### Returns
 
@@ -196,200 +167,149 @@ Arms the monitor so live changes are tracked/scanned.
 ### Example
 
 ```js
-cy.armLiveA11yMonitor({ scanCurrent: true });
-```
-
-`scanCurrent: true` triggers an immediate current-state rescan on arm.
-
----
-
-## `cy.waitForLiveA11yIdle(options?)`
-
-Waits until the monitor is idle (no queued/active scans and quiet period reached).
-
-### Parameters
-
-- `options` (optional): `WaitForLiveA11yIdleOptions`
-  - `quietMs?: number` (default: `500`)
-  - `timeoutMs?: number` (default: `8000`)
-
-### Returns
-
-- `Chainable<LiveA11yStore | null>`
-
-### Example
-
-```js
-cy.waitForLiveA11yIdle({
-  quietMs: 400,
-  timeoutMs: 12000,
+cy.setLiveA11yAutoSetupOptions({
+  observerOptions: {
+    fallbackFullPageScan: { enabled: false },
+    maxQueueSize: 80,
+  },
+  runAccessibility: true,
 });
 ```
 
-Use this before reporting to reduce race conditions and partial captures.
-
 ---
 
-## `cy.stopLiveA11yMonitor()`
+## `cy.setLiveA11yAutoReportOptions(options?)`
 
-Stops the monitor, disconnects observers/listeners, and prevents further live scans.
-
-### Parameters
-
-- none
-
-### Returns
-
-- `Chainable<void>`
-
-### Example
-
-```js
-cy.stopLiveA11yMonitor();
-```
-
----
-
-## `cy.getLiveA11yResults()`
-
-Reads the current in-memory monitor store.
-
-### Parameters
-
-- none
-
-### Returns
-
-- `Chainable<LiveA11yStore | null>`
-
-### Example
-
-```js
-cy.getLiveA11yResults().then((results) => {
-  expect(results?.meta?.started ?? 0).to.be.greaterThan(0);
-});
-```
-
-Use when you want raw data without writing report artifacts.
-
----
-
-## `cy.reportLiveA11yResults(options?)`
-
-Builds report payload, validates it, writes JSON+HTML artifacts, and returns the report object.
+Sets runtime report options for the auto lifecycle in the current test.
 
 ### Parameters
 
 - `options` (optional): `ReportLiveA11yResultsOptions`
   - `outputPath?: string`
-    - default: generated under `cypress/accessibility/` with unique file name
-  - `throwOnValidationFailure?: boolean` (default: `true`)
-  - `includeIncompleteInReport?: boolean` (default: `false`)
-    - when `true`, includes axe-core `incomplete` findings in grouped details and summaries as `INCOMPLETE (manual review)`
-  - incomplete findings are always counted separately from fail/warn violations in summaries and technical metrics
   - `validation?: ReportLiveA11yValidationOptions`
-    - `enabled?: boolean` (default: `true`)
-    - `requireInitialScan?: boolean` (default: `true`)
-    - `minLiveScans?: number` (default: `1`)
-    - `requireNoRuntimeErrors?: boolean` (default: `true`)
-    - `minUniqueLiveRuleIds?: number` (default: `0`)
-    - `requiredLiveRuleIds?: string[]` (default: `[]`)
-    - `minGroupedBySeverity?: Partial<Record<"critical" | "serious" | "moderate" | "minor", number>>` (default: `{}`)
+  - `throwOnValidationFailure?: boolean`
+  - `includeIncompleteInReport?: boolean`
+  - `generateReports?: boolean`
 
 ### Returns
 
-- `Chainable<LiveA11yReport>`
+- `Chainable<void>`
 
 ### Example
 
 ```js
-cy.reportLiveA11yResults({
-  outputPath: "cypress/accessibility/checkout-a11y.json",
+cy.setLiveA11yAutoReportOptions({
   validation: {
-    minLiveScans: 2,
-    minGroupedBySeverity: { critical: 0, serious: 1 },
-    requiredLiveRuleIds: ["color-contrast"],
+    failOnIncludedImpacts: true,
+    minLiveScans: 1,
   },
+  generateReports: false,
 });
 ```
-
-If validation fails, the command throws by default. Set `throwOnValidationFailure: false` when you need to handle failures without throwing from hook context.
 
 ---
 
-## `registerLiveA11yAutoLifecycle(options?)`
+## Auto Lifecycle Notes
 
-Registers plugin-managed `beforeEach` + `afterEach` hooks once (typically in `cypress/support/e2e.js`) so each test is checked with minimal spec instrumentation.
+- Importing `wick-a11y-observer` (or local `src/a11y-observer-commands.js` during repo development) auto-registers lifecycle hooks.
+- Per-test runtime overrides should be set with:
+  - `cy.setLiveA11yAutoSetupOptions(...)`
+  - `cy.setLiveA11yAutoReportOptions(...)`
 
-This helper:
-- sets up the monitor before each test
-- patches `cy.visit()` to run initial scan + arm live monitoring after each navigation
-- waits for idle + writes report after each test
-- marks the current test as failed when validation fails (without throwing a hook error)
+### Env Toggles
 
-### Parameters
-
-- `options` (optional)
-  - `setupOptions?: SetupLiveA11yMonitorOptions`
-  - `initialScan?: { axeOptions?: LiveA11yRunOptions; commandOptions?: RunInitialLiveA11yScanCommandOptions }`
-  - `waitForIdleOptions?: WaitForLiveA11yIdleOptions`
-  - `reportOptions?: ReportLiveA11yResultsOptions`
-  - `failTestOnValidationError?: boolean` (default: `true`)
-  - `failRunOnValidationError?: boolean` (default: `true`)
-  - `stopMonitorAfterEach?: boolean` (default: `true`)
-
-### Incomplete findings reporting toggle
-
-- Environment variable: `LIVE_A11Y_INCLUDE_INCOMPLETE=true|false` (default when omitted: `false`)
-- Override per test (takes precedence over env): `cy.setLiveA11yAutoSetupOptions({ includeIncompleteInReport: true|false })`
-- You can also pass `includeIncompleteInReport` directly in `reportOptions`/`cy.reportLiveA11yResults()`.
-
-### Example
-
-```js
-import { registerLiveA11yAutoLifecycle } from "../../src/a11y-observer-commands.js";
-
-registerLiveA11yAutoLifecycle({
-  setupOptions: {
-    observerOptions: { fallbackFullPageScan: { enabled: false } },
-  },
-  reportOptions: {
-    outputPath: "cypress/accessibility/live-a11y.json",
-  },
-});
-```
-
-Note: this mode relies on `cy.visit()` calls to trigger initial scan + arm for each loaded page.
-In strict mode (`failRunOnValidationError: true`), the run is failed at the end of the spec if any test has validation failures, while still allowing remaining tests to execute.
+- `LIVE_A11Y_RUN=true|false` (default when omitted: `false`)
+- `LIVE_A11Y_GENERATE_REPORTS=true|false` (default when omitted: `true`)
+- `LIVE_A11Y_INCLUDE_INCOMPLETE=true|false` (default when omitted: `false`)
 
 ---
 
-## Typical End-to-End Flow (Manual Hooks)
+## Practical Flow Examples
+
+### 1) Regular flow: initial + live scans (minimum params, defaults)
 
 ```js
-beforeEach(() => {
-  cy.setupLiveA11yMonitor({
-    observerOptions: { fallbackFullPageScan: { enabled: false } },
-  });
-
-  cy.visit("/page-under-test");
-  cy.runInitialLiveA11yScan(undefined, {
-    armAfter: true,
-    armOptions: { scanCurrent: false },
-  });
-});
-
-afterEach(() => {
-  cy.waitForLiveA11yIdle({ quietMs: 500, timeoutMs: 8000 });
-  cy.reportLiveA11yResults();
-  cy.stopLiveA11yMonitor();
+it("runs with default initial + live behavior", () => {
+  cy.visit("/live-a11y-playground");
+  cy.get('[data-cy="open-dialog"]').click();
+  cy.get('[data-cy="dialog"]').should("be.visible");
 });
 ```
 
-For per-test failure behavior without hook-failure cascade, prefer `registerLiveA11yAutoLifecycle()`.
+Notes:
+- Requires `LIVE_A11Y_RUN=true` (for example via `cypress.env.json` or CLI `--env LIVE_A11Y_RUN=true`).
+- Uses default monitor/report behavior.
+- Auto lifecycle performs initial scan after navigation, then live scans on changes.
 
-This pattern captures:
-- initial full-page baseline
-- live/delta changes during interaction
-- machine + human-readable artifacts
+### 2) Same flow, but custom impact policy (`includedImpacts` + `onlyWarnImpacts`)
+
+```js
+it("runs with custom impact policy for initial + live scans", () => {
+  cy.setLiveA11yAutoSetupOptions({
+    runAccessibility: true,
+    initialAxeOptions: {
+      iframes: true,
+      includedImpacts: ["critical", "serious"],
+      onlyWarnImpacts: ["moderate", "minor"],
+    },
+    liveAxeOptions: {
+      iframes: true,
+      includedImpacts: ["critical", "serious"],
+      onlyWarnImpacts: ["moderate", "minor"],
+    },
+  });
+
+  cy.visit("/live-a11y-playground");
+  cy.get('[data-cy="open-dialog"]').click();
+});
+```
+
+Notes:
+- `runAccessibility` in `cy.setLiveA11yAutoSetupOptions(...)` can force behavior per test (`true` to run, `false` to skip).
+- This per-test option overrides the `LIVE_A11Y_RUN` env variable.
+
+### 3) One-time manual snapshot after UI stabilizes
+
+```js
+it("captures a one-time manual checkpoint after stabilization", () => {
+  cy.visit("/live-a11y-playground");
+  cy.get('[data-cy="app-ready"]').should("be.visible");
+
+  cy.checkAccessibility();
+});
+```
+
+Notes:
+- Requires `LIVE_A11Y_RUN=true` (for example via `cypress.env.json` or CLI `--env LIVE_A11Y_RUN=true`).
+- This creates a one-time manual checkpoint at the moment you call it.
+- By default, `checkAccessibility()` waits for monitor idle before running the scan.
+
+### 4) One-time manual snapshot with custom axe options (`runOnly`, `rules`, impacts)
+
+```js
+it("captures one-time manual checkpoint with custom axe configuration", () => {
+  cy.visit("/live-a11y-playground");
+  cy.get('[data-cy="app-ready"]').should("be.visible");
+
+  cy.checkAccessibility({
+    iframes: true,
+    includedImpacts: ["critical", "serious", "moderate"],
+    onlyWarnImpacts: ["minor"],
+    runOnly: {
+      type: "tag",
+      values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
+    },
+    rules: {
+      // Example rule override: disable this rule for this one-time run
+      "color-contrast": { enabled: false },
+    },
+  });
+});
+```
+
+Notes:
+- Requires `LIVE_A11Y_RUN=true` (for example via `cypress.env.json` or CLI `--env LIVE_A11Y_RUN=true`).
+- These axe options apply only to this explicit `checkAccessibility(...)` call.
+- `liveAxeOptions` are not used by this one-time command call; they apply to live observer scans.
+- This call does not start additional live monitoring.
 

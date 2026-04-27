@@ -412,6 +412,7 @@ const buildFallbackDuplicateStats = (groupedViolations = []) => {
 const renderLiveA11yReportHtml = (report) => {
   const counts = report.counts || {};
   const artifact = report.reportArtifact || {};
+  const includeIncompleteInReport = report?.reportOptions?.includeIncompleteInReport === true;
   const bySevDisposition = counts.groupedBySeverityDisposition || {};
   const sevOrder = report.severityOrder || ["critical", "serious", "moderate", "minor"];
   const violations = report.groupedViolations || [];
@@ -635,7 +636,10 @@ const renderLiveA11yReportHtml = (report) => {
       const incompleteCount = Number(sevEntry.incomplete || 0);
       const issuesCount = failCount + warnCount;
       const sectionType = severitySectionTypeLabel(s, bySevDisposition, report.impactPolicy || {});
-      return `<a class="sev-pill ${severityClass(s)}" href="#sev-${escapeHtml(s)}">${sectionType} - ${escapeHtml(s)}: ISSUES ${issuesCount} | INCOMPLETE ${incompleteCount}</a>`;
+      const breakdownLabel = includeIncompleteInReport
+        ? `ISSUES ${issuesCount} | INCOMPLETE ${incompleteCount}`
+        : `ISSUES ${issuesCount}`;
+      return `<a class="sev-pill ${severityClass(s)}" href="#sev-${escapeHtml(s)}">${sectionType} - ${escapeHtml(s)}: ${breakdownLabel}</a>`;
     })
     .join(" ");
 
@@ -691,8 +695,13 @@ const renderLiveA11yReportHtml = (report) => {
         : "VIOLATION ISSUES";
       const sectionBody = [
         renderSeverityBucket(issueBucketTitle, issueCards, "issues"),
-        renderSeverityBucket("Incomplete (manual review)", incompleteCards, "incomplete"),
+        includeIncompleteInReport
+          ? renderSeverityBucket("Incomplete (manual review)", incompleteCards, "incomplete")
+          : "",
       ].filter(Boolean).join("\n");
+      const breakdownSummary = includeIncompleteInReport
+        ? `${issueSummaryLabel}: ${issueCount} · INCOMPLETE: ${incompleteCount}`
+        : `${issueSummaryLabel}: ${issueCount}`;
       return `
   <section class="sev-block ${severityClass(sev)}-section" id="sev-${escapeHtml(sev)}" aria-labelledby="sev-${escapeHtml(sev)}-heading">
     <header class="sev-block-header">
@@ -707,7 +716,7 @@ const renderLiveA11yReportHtml = (report) => {
         dispositionLabel(sectionDisposition)
       )}</span>
         </p>
-        <p class="sev-breakdown subtle">${issueSummaryLabel}: ${issueCount} · INCOMPLETE: ${incompleteCount}</p>
+        <p class="sev-breakdown subtle">${breakdownSummary}</p>
       </div>
       <a class="sev-block-top-link" href="#top">Back to summary</a>
     </header>

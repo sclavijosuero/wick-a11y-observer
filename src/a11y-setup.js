@@ -41,7 +41,7 @@ export function installLiveA11yMonitorOnWindow(win, store, monitorOptions = {}) 
     minVisibleMs: 250,
     stableFrames: 3,
     maxSettleMs: 2000,
-    maxQueueSize: 20,
+    maxQueueSize: 80,
     useConventionRoots: false,
     liveAxeOptions: {
       resultTypes: ['violations', 'incomplete'],

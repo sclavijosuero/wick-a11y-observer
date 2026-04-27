@@ -59,11 +59,19 @@ export interface SetupLiveA11yMonitorOptions {
   liveAxeOptions?: LiveA11yRunOptions;
   observerOptions?: LiveA11yObserverOptions;
   includeIncompleteInReport?: boolean;
+  generateReports?: boolean;
+  runAccessibility?: boolean;
+  skipAccessibility?: boolean;
 }
 
 export interface RunInitialLiveA11yScanCommandOptions {
   armAfter?: boolean;
   armOptions?: ArmLiveA11yMonitorOptions;
+}
+
+export interface CheckAccessibilityCommandOptions {
+  waitForIdleBeforeScan?: boolean;
+  waitForIdleOptions?: WaitForLiveA11yIdleOptions;
 }
 
 export interface ArmLiveA11yMonitorOptions {
@@ -91,21 +99,7 @@ export interface ReportLiveA11yResultsOptions {
   validation?: ReportLiveA11yValidationOptions;
   throwOnValidationFailure?: boolean;
   includeIncompleteInReport?: boolean;
-}
-
-export interface LiveA11yAutoLifecycleInitialScanOptions {
-  axeOptions?: LiveA11yRunOptions;
-  commandOptions?: RunInitialLiveA11yScanCommandOptions;
-}
-
-export interface LiveA11yAutoLifecycleOptions {
-  setupOptions?: SetupLiveA11yMonitorOptions;
-  initialScan?: LiveA11yAutoLifecycleInitialScanOptions;
-  waitForIdleOptions?: WaitForLiveA11yIdleOptions;
-  reportOptions?: ReportLiveA11yResultsOptions;
-  failTestOnValidationError?: boolean;
-  failRunOnValidationError?: boolean;
-  stopMonitorAfterEach?: boolean;
+  generateReports?: boolean;
 }
 
 export interface LiveA11yStore {
@@ -122,8 +116,6 @@ export interface LiveA11yStore {
     [key: string]: unknown;
   };
 }
-
-export function registerLiveA11yAutoLifecycle(options?: LiveA11yAutoLifecycleOptions): void;
 
 export interface LiveA11yScan {
   rootId?: string | number;
@@ -308,27 +300,30 @@ export interface LiveA11yReportArtifact {
 declare global {
   namespace Cypress {
     interface Chainable<Subject = any> {
-      setupLiveA11yMonitor(
-        monitorOptions?: SetupLiveA11yMonitorOptions
-      ): Chainable<LiveA11yStore>;
-
+      /**
+       * Public API: run full-page initial scan and optionally arm live monitor.
+       */
       runInitialLiveA11yScan(
         axeOptions?: LiveA11yRunOptions,
         commandOptions?: RunInitialLiveA11yScanCommandOptions
       ): Chainable<void>;
 
-      armLiveA11yMonitor(options?: ArmLiveA11yMonitorOptions): Chainable<void>;
+      /**
+       * Public API: run a one-time manual accessibility scan for the current page.
+       */
+      checkAccessibility(
+        axeOptions?: LiveA11yRunOptions,
+        commandOptions?: CheckAccessibilityCommandOptions
+      ): Chainable<void>;
 
-      waitForLiveA11yIdle(options?: WaitForLiveA11yIdleOptions): Chainable<LiveA11yStore | null>;
-
-      stopLiveA11yMonitor(): Chainable<void>;
-
-      getLiveA11yResults(): Chainable<LiveA11yStore | null>;
-
-      reportLiveA11yResults(options?: ReportLiveA11yResultsOptions): Chainable<LiveA11yReport>;
-
+      /**
+       * Public API: per-test runtime override for report options.
+       */
       setLiveA11yAutoReportOptions(options?: ReportLiveA11yResultsOptions): Chainable<void>;
 
+      /**
+       * Public API: per-test runtime override for setup/observer options.
+       */
       setLiveA11yAutoSetupOptions(options?: SetupLiveA11yMonitorOptions): Chainable<void>;
     }
   }
