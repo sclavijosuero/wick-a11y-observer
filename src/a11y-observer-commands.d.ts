@@ -96,6 +96,7 @@ export interface ReportLiveA11yValidationOptions {
 
 export interface ReportLiveA11yResultsOptions {
   outputPath?: string;
+  checkpointLabel?: string;
   validation?: ReportLiveA11yValidationOptions;
   throwOnValidationFailure?: boolean;
   includeIncompleteInReport?: boolean;
@@ -291,10 +292,15 @@ export interface LiveA11yReportArtifact {
   cypressSpecRelative?: string;
   testTitle?: string;
   testTitleForFilename?: string;
+  scanType?: "live" | "checkpoint";
+  testNumberInSpec?: number;
+  testNumberInSpecLabel?: string;
   reportEmissionInSpec?: number;
+  equivalentLiveReportNumber?: number;
   testOrdinalInSuite?: number;
   testCountInSuite?: number;
   testOrdinalLabel?: string;
+  checkpointLabel?: string;
 }
 
 declare global {
@@ -309,7 +315,7 @@ declare global {
       ): Chainable<void>;
 
       /**
-       * Public API: run a one-time manual accessibility scan for the current page.
+       * Public API: run a one-time checkpoint accessibility scan for the current page.
        */
       checkAccessibility(
         axeOptions?: LiveA11yRunOptions,

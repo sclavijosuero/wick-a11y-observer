@@ -282,7 +282,7 @@ describe('live a11y auto lifecycle', () => {
 
   });
 
-  it('one-time manual scan after UI stabilizes', () => {
+  it('one-time checkpoint scan after UI stabilizes', () => {
     cy.visit('/live-axe-monitor-playground.html');
     cy.get('[data-cy=monitor-page-title]').should('be.visible');
 
@@ -290,11 +290,12 @@ describe('live a11y auto lifecycle', () => {
     cy.get('[data-cy=reveal-existing-issues]').click();
     cy.get('[data-cy=existing-issues-panel]').should('be.visible');
 
-    // One-time manual checkpoint scan.
+    // One-time checkpoint scan.
     cy.checkAccessibility();
   });
 
-  it.only('one-time manual scan with custom axe options', () => {
+  it('one-time checkpoint scan with custom axe options', () => {
+
     cy.visit('/live-axe-monitor-playground.html');
     cy.get('[data-cy=monitor-page-title]').should('be.visible');
 
@@ -311,10 +312,72 @@ describe('live a11y auto lifecycle', () => {
       runOnly: standardsTags,
       rules: {
         // Example rule override for this one-time run.
-        'color-contrast': { enabled: false },
+        'color-contrast': { enabled: true },
+      }
+    })
+  })
+
+  it('two-time checkpoint scan with different custom axe options', () => {
+    // Keep this test focused on explicit checkpoints.
+    // Otherwise afterEach emits an additional auto report with only the last state.
+    cy.setLiveA11yAutoReportOptions({
+      generateReports: false,
+      validation: {
+        enabled: false,
       },
     });
 
+    cy.visit('/live-axe-monitor-playground.html');
+    cy.get('[data-cy=monitor-page-title]').should('be.visible');
 
+    // Expose additional violations before the one-time scan.
+    cy.get('[data-cy=inject-second-only-issues]').click();
+    cy.get('[data-cy=second-only-issues-panel]').should('be.visible');
+    cy.get('[data-cy=reveal-existing-issues]').click();
+    cy.get('[data-cy=existing-issues-panel]').should('be.visible');
+
+    // Check point A
+    cy.checkAccessibility({
+      iframes: true,
+      includedImpacts: ['critical', 'serious'],
+      onlyWarnImpacts: ['moderate', 'minor'],
+      runOnly: standardsTags,
+      rules: {
+        // Example rule override for this one-time run.
+        'color-contrast': { enabled: true },
+      },
+    });
+    cy.reportLiveA11yResults({
+      checkpointLabel: 'A',
+      includeIncompleteInReport: true,
+      validation: {
+        enabled: false,
+      },
+      throwOnValidationFailure: false,
+    });
+
+    // Between the two checkpoints, there could be other cypress commands and actions like get(), click(), etc.
+    // [...code...]
+
+    // Check point B
+    cy.checkAccessibility({
+      iframes: true,
+      includedImpacts: ['critical'],
+      onlyWarnImpacts: ['serious', 'moderate'],
+      runOnly: standardsTags,
+      rules: {
+        // Example rule override for this one-time run.
+        'color-contrast': { enabled: false },
+      },
+
+    });
+    cy.reportLiveA11yResults({
+      checkpointLabel: 'B',
+      includeIncompleteInReport: true,
+      validation: {
+        enabled: false,
+      },
+      throwOnValidationFailure: false,
+    });
   });
 });

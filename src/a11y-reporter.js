@@ -1000,6 +1000,7 @@ const buildReportSummary = (payload = {}) => {
   const counts = payload.counts || {};
   const monitorMeta = payload.meta || {};
   const includeIncompleteInReport = payload?.reportOptions?.includeIncompleteInReport === true;
+  const validationStatus = String(payload?.validation?.status || "—").toUpperCase();
   const duplicateStats = buildCrossReportDuplicateStats(payload.groupedViolations);
   const reportEmissionInSpec = Number(artifact.reportEmissionInSpec || 0);
   const generatedLocal = payload.generatedAt
@@ -1007,6 +1008,17 @@ const buildReportSummary = (payload = {}) => {
       dateStyle: "full",
       timeStyle: "medium",
     })
+    : "—";
+  const testNumberLabel = artifact.testNumberInSpec != null
+    ? `T${String(artifact.testNumberInSpec).padStart(2, "0")}`
+    : "";
+  const checkpointLabel = String(artifact.checkpointLabel || "").trim();
+  const checkpointSuffix = checkpointLabel
+    ? ` · Checkpoint ${checkpointLabel.toUpperCase()}`
+    : "";
+  const testInSuiteWithLabel = artifact.testOrdinalLabel
+    ? (testNumberLabel ? `${artifact.testOrdinalLabel} (${testNumberLabel})` : artifact.testOrdinalLabel)
+      + checkpointSuffix
     : "—";
   const technicalMetrics = {
     initialViolationsRaw: Number(counts.initialViolations || 0),
@@ -1074,7 +1086,8 @@ const buildReportSummary = (payload = {}) => {
       reportId: artifact.reportId || "—",
       specFile: artifact.specFile || "—",
       cypressTest: artifact.testTitle || "—",
-      testInSuite: artifact.testOrdinalLabel || "—",
+      testInSuite: testInSuiteWithLabel,
+      validationStatus,
       generatedLocal,
       reportFileJson: artifact.fileName || "—",
     },
@@ -1082,6 +1095,82 @@ const buildReportSummary = (payload = {}) => {
     technicalMetrics,
     metricHelp,
   };
+};
+
+const resolveValidationStatus = (counts = {}, validationResult = {}) => {
+  const groupedByDisposition = counts.groupedByDisposition || {};
+  const hasFailingIncludedImpacts = Number(groupedByDisposition.fail || 0) > 0;
+  const status = hasFailingIncludedImpacts || !validationResult?.valid ? "FAIL" : "PASS";
+  return {
+    status,
+    hasFailingIncludedImpacts,
+  };
+};
+
+const formatTerminalSeverityLine = (severity, severityDisposition = {}, includeIncomplete = false) => {
+  const fail = Number(severityDisposition.fail || 0);
+  const warn = Number(severityDisposition.warn || 0);
+  const incomplete = Number(severityDisposition.incomplete || 0);
+  const base = `${severity}: fail=${fail}, warn=${warn}`;
+  return includeIncomplete ? `${base}, incomplete=${incomplete}` : base;
+};
+
+const logLiveA11yReportToTerminal = (payload, validationResult, { savedTo, savedHtmlTo } = {}) => {
+  const artifact = payload?.reportArtifact || {};
+  const counts = payload?.counts || {};
+  const summary = payload?.summary || {};
+  const groupedViolations = Array.isArray(payload?.groupedViolations) ? payload.groupedViolations : [];
+  const includeIncomplete = payload?.reportOptions?.includeIncompleteInReport === true;
+  const severityOrder = Array.isArray(payload?.severityOrder) && payload.severityOrder.length > 0
+    ? payload.severityOrder
+    : SEVERITY_ORDER;
+  const groupedBySeverityDisposition = counts.groupedBySeverityDisposition || {};
+  const groupedByDisposition = counts.groupedByDisposition || {};
+  const scanType = String(artifact.scanType || "live").toLowerCase();
+  const scanLabel = scanType === "checkpoint" ? "checkpoint" : "live";
+  const reportId = artifact.reportId || "unknown-report";
+  const reportPath = savedTo || "in-memory (generateReports=false)";
+  const htmlPath = savedHtmlTo || "not-generated";
+  const validationState = resolveValidationStatus(counts, validationResult).status;
+  const terminalSeparator = "[A11Y] " + "=".repeat(86);
+
+  // Keep terminal output concise but actionable for CI logs.
+  console.log(`\n${terminalSeparator}`);
+  console.log(`[A11Y] Report ${reportId} (${scanLabel})`);
+  console.log(`[A11Y] Spec: ${summary?.identity?.specFile || artifact.specFile || "unknown-spec"}`);
+  console.log(`[A11Y] Test: ${summary?.identity?.cypressTest || artifact.testTitle || "unknown-test"}`);
+  console.log(`[A11Y] Validation: ${validationState}`);
+  console.log(
+    `[A11Y] Totals: groupedFindings=${Number(counts.groupedFindingsTotal || 0)}, issues=${Number(counts.groupedViolations || 0)}, fail=${Number(groupedByDisposition.fail || 0)}, warn=${Number(groupedByDisposition.warn || 0)}`
+    + (includeIncomplete ? `, incomplete=${Number(groupedByDisposition.incomplete || 0)}` : "")
+  );
+  console.log("[A11Y] Severity summary:");
+  severityOrder.forEach((severity) => {
+    console.log(`  - ${formatTerminalSeverityLine(severity, groupedBySeverityDisposition[severity], includeIncomplete)}`);
+  });
+  console.log(`[A11Y] JSON: ${reportPath}`);
+  console.log(`[A11Y] HTML: ${htmlPath}`);
+  console.log("[A11Y] Violations and affected nodes:");
+
+  if (groupedViolations.length === 0) {
+    console.log("  - none");
+    return;
+  }
+
+  groupedViolations.forEach((violation, index) => {
+    const disposition = String(violation?.disposition || "fail").toLowerCase();
+    const findingType = String(violation?.findingType || "violation").toLowerCase();
+    const impact = String(violation?.impact || "none").toLowerCase();
+    const nodeDetails = Array.isArray(violation?.nodeDetails) ? violation.nodeDetails : [];
+    console.log(
+      `  ${index + 1}. [${disposition}] ${violation?.id || "unknown-rule"} (${impact}, ${findingType}) nodes=${nodeDetails.length}`
+    );
+    nodeDetails.forEach((node) => {
+      const page = node?.pageUrl ? ` @ ${node.pageUrl}` : "";
+      console.log(`     - ${node?.target || "<unknown-node>"}${page}`);
+    });
+  });
+  console.log(terminalSeparator);
 };
 
 const registerLiveA11yReporterTasks = (on) => {
@@ -1102,8 +1191,13 @@ const registerLiveA11yReporterTasks = (on) => {
       enrichNodesWithCrossReportRepeat(report.groupedViolations, repeatInfo);
       const validationResult = validateLiveA11yReport(report, validation);
       const absolutePath = path.resolve(outputPath);
+      const validationStatus = resolveValidationStatus(report.counts, validationResult);
       const payload = {
         ...report,
+        validation: {
+          ...validationResult,
+          ...validationStatus,
+        },
         reportArtifact: attachReportArtifact(outputPath, absolutePath, reportMeta),
         summary: undefined,
         footnote: {
@@ -1117,14 +1211,13 @@ const registerLiveA11yReporterTasks = (on) => {
       let htmlReportRelative;
       if (generateArtifacts !== false) {
         savedTo = writeJson(outputPath, payload);
-        savedHtmlTo = writeLiveA11yHtmlReport(outputPath, {
-          ...payload,
-          validation: validationResult,
-        });
+        savedHtmlTo = writeLiveA11yHtmlReport(outputPath, payload);
         htmlReportRelative = String(outputPath)
           .replace(/\\/g, "/")
           .replace(/\.json$/i, ".html");
       }
+
+      logLiveA11yReportToTerminal(payload, validationResult, { savedTo, savedHtmlTo });
 
       if (!validationResult.valid && !deferValidationFailure) {
         throw new Error(
@@ -1137,7 +1230,7 @@ const registerLiveA11yReporterTasks = (on) => {
         savedTo,
         savedHtmlTo,
         htmlReportRelative,
-        validation: validationResult,
+        validation: payload.validation,
       };
     },
   });

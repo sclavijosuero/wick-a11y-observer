@@ -42,17 +42,38 @@ const formatSortableLocalTimestamp = (d) => {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}_${p(d.getMilliseconds(), 3)}`;
 };
 
-const buildDefaultLiveA11yReportFileName = (stem, sortableLocal, emissionPadded) =>
-  `live-axe--${stem}--${sortableLocal}--R${emissionPadded}.json`;
+const normalizeScanType = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  return normalized === 'checkpoint' ? 'checkpoint' : 'live';
+};
+
+const buildDefaultLiveA11yReportFileName = (sortableLocal, testNumberPadded) =>
+  `a11y-live-auto--${sortableLocal}--T${testNumberPadded}.json`;
+
+const sanitizeCheckpointLabel = (label) => {
+  const normalized = String(label || '').trim().replace(/^checkpoint[-_\s]*/i, '');
+  const sanitized = sanitizeSpecStemForFilename(normalized);
+  return (sanitized || 'checkpoint').toUpperCase();
+};
+
+const buildDefaultCheckpointA11yReportFileName = (
+  sortableLocal,
+  testNumberPadded,
+  checkpointLabel
+) =>
+  checkpointLabel
+    ? `a11y-checkpoint--${sortableLocal}--T${testNumberPadded}-checkpoint-${checkpointLabel}.json`
+    : `a11y-checkpoint--${sortableLocal}--T${testNumberPadded}.json`;
 
 /**
  * Default live-axe JSON path and report metadata. Uses the current spec file stem, sortable
  * local timestamp, per-spec emission number, and current test title (for unique ID when a file
  * emits more than one report per run).
  * @param {string | undefined} outputPathOverride
+ * @param {{ checkpointLabel?: string, scanType?: "live" | "checkpoint" }} [namingOptions]
  * @returns {{ outputPath: string, reportMeta: Record<string, string | number | undefined> }}
  */
-const buildLiveA11yOutputPathAndMeta = (outputPathOverride) => {
+const buildLiveA11yOutputPathAndMeta = (outputPathOverride, namingOptions = {}) => {
   const specRaw = Cypress.spec?.name || fileBasename(Cypress.spec?.relative) || 'unknown-spec';
   const stem = sanitizeSpecStemForFilename(String(specRaw).replace(/\.cy\.(js|jsx|ts|tsx)$/i, ''));
   const d = new Date();
@@ -67,15 +88,32 @@ const buildLiveA11yOutputPathAndMeta = (outputPathOverride) => {
       .slice(0, 64)
   );
   const suiteOrd = getTestOrdinalInCurrentMochaSuite();
-  const emissionPadded = String(emission).padStart(2, '0');
-  // Short id + filename: live-axe--<spec>--<ts>--R01 (no per-test title slug in id)
-  const defaultReportFileName = buildDefaultLiveA11yReportFileName(
-    stem,
-    sortableLocal,
-    emissionPadded
-  );
+  const scanType = normalizeScanType(namingOptions?.scanType);
+  const checkpointLabel = namingOptions?.checkpointLabel;
+  const testNumberInSpec = suiteOrd?.index || emission;
+  const testNumberInSpecPadded = String(testNumberInSpec).padStart(2, '0');
+  const sanitizedCheckpointLabel = checkpointLabel
+    ? sanitizeCheckpointLabel(checkpointLabel)
+    : undefined;
+  const isCheckpointScanReport = scanType === 'checkpoint';
+  // Default live id + filename: a11y-live-auto--<ts>--T01
+  // Checkpoint scan id + filename: a11y-checkpoint--<ts>--T01-checkpoint-A
+  const defaultReportFileName = isCheckpointScanReport
+    ? buildDefaultCheckpointA11yReportFileName(
+      sortableLocal,
+      testNumberInSpecPadded,
+      sanitizedCheckpointLabel
+    )
+    : buildDefaultLiveA11yReportFileName(
+      sortableLocal,
+      testNumberInSpecPadded
+    );
   const defaultPath = `${DEFAULT_ACCESSIBILITY_RESULTS_FOLDER}/${defaultReportFileName}`;
-  const reportId = `live-axe--${stem}--${sortableLocal}--R${emissionPadded}`;
+  const reportId = isCheckpointScanReport
+    ? (sanitizedCheckpointLabel
+      ? `a11y-checkpoint--${sortableLocal}--T${testNumberInSpecPadded}-checkpoint-${sanitizedCheckpointLabel}`
+      : `a11y-checkpoint--${sortableLocal}--T${testNumberInSpecPadded}`)
+    : `a11y-live-auto--${sortableLocal}--T${testNumberInSpecPadded}`;
   const testOrdinalLabel =
     suiteOrd != null ? `Test ${suiteOrd.index} of ${suiteOrd.total} in current suite` : undefined;
   const reportMeta = {
@@ -87,10 +125,15 @@ const buildLiveA11yOutputPathAndMeta = (outputPathOverride) => {
     cypressSpecRelative: Cypress.spec?.relative,
     testTitle,
     testTitleForFilename: testTitleSlug,
+    scanType,
+    testNumberInSpec,
+    testNumberInSpecLabel: `T${testNumberInSpecPadded}`,
     reportEmissionInSpec: emission,
+    equivalentLiveReportNumber: testNumberInSpec,
     testOrdinalInSuite: suiteOrd?.index,
     testCountInSuite: suiteOrd?.total,
     testOrdinalLabel,
+    checkpointLabel: sanitizedCheckpointLabel,
   };
   return {
     outputPath: outputPathOverride || defaultPath,
@@ -138,7 +181,7 @@ const normalizeRunOnlyValues = (runOnly) => {
   return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
 };
 
-const syncManualScanPolicyOnStore = (store, axeOptions = {}) => {
+const syncCheckpointScanPolicyOnStore = (store, axeOptions = {}) => {
   if (!store || typeof store !== 'object') return;
   if (!store.meta || typeof store.meta !== 'object') {
     store.meta = {};
@@ -158,6 +201,10 @@ const syncManualScanPolicyOnStore = (store, axeOptions = {}) => {
     !hasWarnImpactsOverride &&
     !hasRunOnlyOverride
   ) {
+    store.meta.analysis = {
+      ...analysis,
+      scanType: 'checkpoint',
+    };
     return;
   }
 
@@ -176,6 +223,7 @@ const syncManualScanPolicyOnStore = (store, axeOptions = {}) => {
 
   const mergedAnalysis = {
     ...analysis,
+    scanType: 'checkpoint',
     configuredImpactLevels: considered,
     configuredIncludedImpactLevels: included,
     configuredWarnImpactLevels: warn,
@@ -195,6 +243,44 @@ const syncManualScanPolicyOnStore = (store, axeOptions = {}) => {
 const clearPriorLiveEntriesOnStore = (store) => {
   if (!store || typeof store !== 'object') return;
   store.live = [];
+};
+
+const setScanTypeOnStore = (store, scanType = 'live') => {
+  if (!store || typeof store !== 'object') return;
+  if (!store.meta || typeof store.meta !== 'object') {
+    store.meta = {};
+  }
+  const analysis = store.meta.analysis && typeof store.meta.analysis === 'object'
+    ? store.meta.analysis
+    : {};
+  store.meta.analysis = {
+    ...analysis,
+    scanType: normalizeScanType(scanType),
+  };
+};
+
+const resolveScanTypeForReport = (results, checkpointLabel) => {
+  if (checkpointLabel) {
+    return 'checkpoint';
+  }
+  const scanTypeFromMeta = normalizeScanType(results?.meta?.analysis?.scanType);
+  return scanTypeFromMeta;
+};
+
+const resolveCheckpointLabelForReport = (scanType, checkpointLabel) => {
+  const normalizedCheckpointLabel = typeof checkpointLabel === 'string'
+    ? checkpointLabel.trim()
+    : checkpointLabel;
+  if (normalizedCheckpointLabel) {
+    return normalizedCheckpointLabel;
+  }
+  if (
+    scanType === 'checkpoint'
+    && (checkpointLabel === true || normalizedCheckpointLabel === 'auto')
+  ) {
+    return getAndIncrementAutoCheckpointLabelForCurrentTest();
+  }
+  return undefined;
 };
 
 const normalizeRunOnly = (baseRunOnly = {}, overrideRunOnly = {}) => ({
@@ -285,6 +371,8 @@ const seenNodeViolationsBySpec = new Map();
 // Monotonically increasing report emission number per spec file (resets per Cypress run),
 // for unique filenames and report IDs when a spec calls reportLiveA11yResults more than once.
 const specReportEmissionBySpec = new Map();
+// spec+test key -> auto checkpoint label emission counter (A, B, ...).
+const autoCheckpointLabelEmissionByTest = new Map();
 // specKey -> Map<nodeViolationKey, firstReportId> for cross-report "repeated" HTML + log context
 const specToNodeKeyFirstReportId = new Map();
 
@@ -324,6 +412,33 @@ const getAndIncrementSpecReportEmission = () => {
   const n = (specReportEmissionBySpec.get(k) || 0) + 1;
   specReportEmissionBySpec.set(k, n);
   return n;
+};
+
+/**
+ * 1 -> A, 2 -> B, ... 26 -> Z, 27 -> AA, ...
+ * @param {number} index
+ * @returns {string}
+ */
+const toAlphabeticLabel = (index) => {
+  let n = Number(index) || 1;
+  let out = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    out = String.fromCharCode(65 + rem) + out;
+    n = Math.floor((n - 1) / 26);
+  }
+  return out || 'A';
+};
+
+/**
+ * Auto checkpoint label for current test context: checkpoint-A, checkpoint-B, ...
+ * @returns {string}
+ */
+const getAndIncrementAutoCheckpointLabelForCurrentTest = () => {
+  const key = `${currentSpecKey()}::${getCurrentTestTitleForMeta()}`;
+  const next = (autoCheckpointLabelEmissionByTest.get(key) || 0) + 1;
+  autoCheckpointLabelEmissionByTest.set(key, next);
+  return `checkpoint-${toAlphabeticLabel(next)}`;
 };
 
 /**
@@ -980,7 +1095,7 @@ Cypress.Commands.add(
       if (!win.__liveA11yMonitor) {
         throw new Error('Live a11y monitor is not installed on window. Call cy.setupLiveA11yMonitor() before running scans.');
       }
-
+      setScanTypeOnStore(win.__liveA11yMonitor.store, 'live');
       await win.__liveA11yMonitor.runInitialFullPageScan(axeOptions);
 
       if (commandOptions?.armAfter) {
@@ -1006,7 +1121,7 @@ Cypress.Commands.add(
         }
         const monitorStore = win.__liveA11yMonitor.store;
         clearPriorLiveEntriesOnStore(monitorStore);
-        syncManualScanPolicyOnStore(monitorStore, axeOptions || {});
+        syncCheckpointScanPolicyOnStore(monitorStore, axeOptions || {});
         await win.__liveA11yMonitor.runInitialFullPageScan(axeOptions);
       });
     };
@@ -1069,7 +1184,6 @@ Cypress.Commands.add('getLiveA11yResults', () => {
 });
 
 Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
-  const { outputPath, reportMeta } = buildLiveA11yOutputPathAndMeta(options.outputPath);
   const throwOnValidationFailure = options.throwOnValidationFailure !== false;
   const includeIncompleteInReport = resolveIncludeIncompleteInReport(options);
   const generateArtifacts = resolveGenerateLiveA11yReports(options);
@@ -1083,6 +1197,12 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
   };
 
   return cy.getLiveA11yResults().then((results) => {
+    const scanType = resolveScanTypeForReport(results, options.checkpointLabel);
+    const checkpointLabel = resolveCheckpointLabelForReport(scanType, options.checkpointLabel);
+    const { outputPath, reportMeta } = buildLiveA11yOutputPathAndMeta(options.outputPath, {
+      checkpointLabel,
+      scanType,
+    });
     Cypress.expose('liveA11yResults', results);
     const frMap = getNodeFirstReportIdMapForCurrentSpec();
     const previousNodeKeys = [...getSeenNodeSetForCurrentSpec()];
@@ -1377,6 +1497,7 @@ const ensureLiveA11yAutoNavigationHook = ({ setupOptions, initialScan }) => {
       if (!monitor) {
         return;
       }
+      setScanTypeOnStore(monitor.store, 'live');
       monitor
         .runInitialFullPageScan(initialScan?.axeOptions)
         .then(() => {

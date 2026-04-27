@@ -42,14 +42,14 @@ const uniqueStringValues = (...groups) => [
 ];
 
 const reportSuffixFromArtifact = (artifact = {}) => {
-  const reportIdMatch = String(artifact.reportId || "").match(/--(R\d+)$/i);
+  const reportIdMatch = String(artifact.reportId || "").match(/--(T\d+)(?:-|$)/i);
   if (reportIdMatch) {
     return reportIdMatch[1].toUpperCase();
   }
-  if (artifact.reportEmissionInSpec == null) {
+  if (artifact.testNumberInSpec == null) {
     return "";
   }
-  return `R${String(artifact.reportEmissionInSpec).padStart(2, "0")}`;
+  return `T${String(artifact.testNumberInSpec).padStart(2, "0")}`;
 };
 
 const formatIsoLocal = (iso) => {
@@ -443,9 +443,13 @@ const renderLiveA11yReportHtml = (report) => {
     ? `Test ${artifact.testOrdinalInSuite} of ${artifact.testCountInSuite} in current suite`
     : "—");
   const reportSuffix = reportSuffixFromArtifact(artifact);
+  const checkpointLabel = String(artifact.checkpointLabel || "").trim();
+  const checkpointSuffix = checkpointLabel
+    ? ` · Checkpoint ${checkpointLabel.toUpperCase()}`
+    : "";
   const testAndReportLabel = reportSuffix
-    ? `${testInSuiteLabel} (${reportSuffix})`
-    : testInSuiteLabel;
+    ? `${testInSuiteLabel} (${reportSuffix})${checkpointSuffix}`
+    : `${testInSuiteLabel}${checkpointSuffix}`;
   const duplicateStats = buildFallbackDuplicateStats(violations);
   const reportEmissionInSpec = Number(artifact.reportEmissionInSpec || 0);
   const fallbackSummary = {
@@ -575,6 +579,15 @@ const renderLiveA11yReportHtml = (report) => {
     },
   };
   const summary = report.summary || fallbackSummary;
+  const validationStatusRaw = String(
+    summary.identity?.validationStatus || report?.validation?.status || "—"
+  ).toUpperCase();
+  const validationStatusClass = validationStatusRaw === "FAIL"
+    ? "validation-fail"
+    : validationStatusRaw === "PASS"
+      ? "validation-pass"
+      : "validation-unknown";
+  const validationStatusBadge = `<span class="validation-badge ${validationStatusClass}">${escapeHtml(validationStatusRaw)}</span>`;
   const identityRows = [
     ["Report ID", escapeHtml(summary.identity?.reportId || "—")],
     ["Spec file", escapeHtml(summary.identity?.specFile || "—")],
@@ -585,8 +598,13 @@ const renderLiveA11yReportHtml = (report) => {
   ];
   const identityTable = identityRows
     .map(
-      ([k, val]) => `
-    <tr><th scope="row">${k}</th><td>${val}</td></tr>`
+      ([k, val]) => {
+        const renderedValue = val && typeof val === "object" && Object.prototype.hasOwnProperty.call(val, "html")
+          ? val.html
+          : val;
+        return `
+    <tr><th scope="row">${k}</th><td>${renderedValue}</td></tr>`;
+      }
     )
     .join("");
   const technicalOrder = Array.isArray(summary.technicalOrder) && summary.technicalOrder.length > 0
@@ -645,6 +663,10 @@ const renderLiveA11yReportHtml = (report) => {
 
   const analysisOptions = `
       <h2>Analysis Options</h2>
+      <div class="analysis-option-row">
+        <span class="analysis-option-label">Scan mode</span>
+        <span class="analysis-option-values">${escapeHtml(String(artifact.scanType || "live").toUpperCase())}</span>
+      </div>
       <div class="analysis-option-row">
         <span class="analysis-option-label">Rule tags used</span>
         <span class="analysis-option-values">${renderOptionPills(configuredRunOnlyTags) || "All configured axe-core rules"}</span>
@@ -810,6 +832,46 @@ const renderLiveA11yReportHtml = (report) => {
     }
     .summary th, .summary td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); }
     .summary th { width: 42%; color: var(--muted); font-weight: 500; }
+    .validation-status-row th,
+    .validation-status-row td {
+      font-weight: 700;
+    }
+    .validation-status-row.validation-pass th,
+    .validation-status-row.validation-pass td {
+      background: #0f2a1f;
+      border-bottom-color: #296b47;
+    }
+    .validation-status-row.validation-fail th,
+    .validation-status-row.validation-fail td {
+      background: #361414;
+      border-bottom-color: #7a2d2d;
+    }
+    .validation-status-row.validation-unknown th,
+    .validation-status-row.validation-unknown td {
+      background: #212a34;
+      border-bottom-color: #3b4f66;
+    }
+    .validation-badge {
+      display: inline-block;
+      font-weight: 800;
+      letter-spacing: 0.02em;
+      font-size: 0.95rem;
+      padding: 0.15rem 0.55rem;
+      border-radius: 999px;
+      border: 2px solid currentColor;
+    }
+    .validation-badge.validation-pass {
+      color: #9ce8b8;
+      background: #123121;
+    }
+    .validation-badge.validation-fail {
+      color: #ffb3b3;
+      background: #4a1d1d;
+    }
+    .validation-badge.validation-unknown {
+      color: #c8d5e3;
+      background: #2a3948;
+    }
     .summary-groups {
       display: grid;
       grid-template-columns: minmax(18rem, 1fr);
@@ -828,6 +890,11 @@ const renderLiveA11yReportHtml = (report) => {
     }
     .summary-group .subtle {
       margin: 0;
+    }
+    .validation-callout {
+      margin: 0.45rem 0 0.6rem;
+      font-size: 1rem;
+      font-weight: 700;
     }
     .tech-grid {
       width: 100%;
@@ -1308,7 +1375,7 @@ const renderLiveA11yReportHtml = (report) => {
     <div class="summary-groups" aria-label="Top summary sections">
       <section class="summary-group summary-group-identity" aria-label="Report identity">
         <h2>Report Identity</h2>
-        <p class="subtle">Stable report metadata and file references.</p>
+        <p class="validation-callout">Validation status: ${validationStatusBadge}</p>
         <table class="summary" role="table" aria-label="Report identity summary">
           <tbody>${identityTable}</tbody>
         </table>
