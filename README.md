@@ -506,6 +506,10 @@ The same computed validation status (`PASS` / `FAIL`) is also persisted into the
 
 ## Change Log
 
+### `1.0.0-beta.1`
+
+- Fixes first-test live monitor lifecycle reliability across navigation, improves checkpoint log clarity (A/B labeling), and reduces checkpoint-test noise by skipping redundant auto afterEach report logs while preserving strict end-of-suite failure reporting.
+
 ### `1.0.0-beta.0`
 
 - First public beta release: continuous live + checkpoint accessibility scanning for Cypress, including violations, warnings and optional `incomplete` findings, with strict end-of-run validation, rich JSON/HTML reports, and CI-friendly terminal summaries.
