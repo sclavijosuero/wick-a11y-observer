@@ -92,6 +92,7 @@ Installs the live monitor in the AUT window, creates/aliases an internal store, 
   - `initialAxeOptions?: LiveA11yRunOptions`
   - `liveAxeOptions?: LiveA11yRunOptions`
   - `observerOptions?: LiveA11yObserverOptions`
+  - `includeIncompleteInReport?: boolean` (default: `false`)
 
 ### Returns
 
@@ -283,6 +284,9 @@ Builds report payload, validates it, writes JSON+HTML artifacts, and returns the
   - `outputPath?: string`
     - default: generated under `cypress/accessibility/` with unique file name
   - `throwOnValidationFailure?: boolean` (default: `true`)
+  - `includeIncompleteInReport?: boolean` (default: `false`)
+    - when `true`, includes axe-core `incomplete` findings in grouped details and summaries as `INCOMPLETE (manual review)`
+  - incomplete findings are always counted separately from fail/warn violations in summaries and technical metrics
   - `validation?: ReportLiveA11yValidationOptions`
     - `enabled?: boolean` (default: `true`)
     - `requireInitialScan?: boolean` (default: `true`)
@@ -333,6 +337,12 @@ This helper:
   - `failTestOnValidationError?: boolean` (default: `true`)
   - `failRunOnValidationError?: boolean` (default: `true`)
   - `stopMonitorAfterEach?: boolean` (default: `true`)
+
+### Incomplete findings reporting toggle
+
+- Environment variable: `LIVE_A11Y_INCLUDE_INCOMPLETE=true|false` (default when omitted: `false`)
+- Override per test (takes precedence over env): `cy.setLiveA11yAutoSetupOptions({ includeIncompleteInReport: true|false })`
+- You can also pass `includeIncompleteInReport` directly in `reportOptions`/`cy.reportLiveA11yResults()`.
 
 ### Example
 

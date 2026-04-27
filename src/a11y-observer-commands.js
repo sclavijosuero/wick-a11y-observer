@@ -4,6 +4,7 @@ const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = 'cypress/accessibility';
 const LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY = '__liveA11yAutoReportOptions';
 const LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY = '__liveA11yAutoSetupOptions';
 const LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY = '__liveA11yAutoActiveStore';
+const LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR = 'LIVE_A11Y_INCLUDE_INCOMPLETE';
 
 /**
  * @param {string} p
@@ -130,6 +131,35 @@ const mergeA11yRunOptions = (baseOptions = {}, overrideOptions = {}) => ({
   },
 });
 
+const parseOptionalBoolean = (value) => {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (value === 1) return true;
+    if (value === 0) return false;
+    return undefined;
+  }
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'y', 'on'].includes(normalized)) return true;
+  if (['0', 'false', 'no', 'n', 'off'].includes(normalized)) return false;
+  return undefined;
+};
+
+const resolveIncludeIncompleteInReport = (...optionSources) => {
+  for (const source of optionSources) {
+    if (
+      source &&
+      Object.prototype.hasOwnProperty.call(source, 'includeIncompleteInReport')
+    ) {
+      const parsed = parseOptionalBoolean(source.includeIncompleteInReport);
+      if (typeof parsed === 'boolean') return parsed;
+    }
+  }
+  const parsedFromEnv = parseOptionalBoolean(Cypress.env(LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR));
+  if (typeof parsedFromEnv === 'boolean') return parsedFromEnv;
+  return false;
+};
+
 // Tracks previously seen rule+node pairs across tests in the same spec file
 // (key includes normalized page URL so the same target on a different page is not "repeated").
 const seenNodeViolationsBySpec = new Map();
@@ -165,8 +195,8 @@ const normalizePageUrlForKey = (u) => {
   return s;
 };
 
-const nodeViolationKey = (ruleId, target, pageUrl) =>
-  `${ruleId}@@${target || '<unknown>'}@@${normalizePageUrlForKey(pageUrl)}`;
+const nodeViolationKey = (_ruleId, target, pageUrl, _findingType = 'violation') =>
+  `${target || '<unknown>'}@@${normalizePageUrlForKey(pageUrl)}`;
 
 const canonicalNodeTarget = (node = {}) => node.rawTarget || node.target;
 
@@ -291,7 +321,7 @@ const recordFirstReportIdsFromGroupedReport = (groupedViolations, reportId) => {
   const m = getNodeFirstReportIdMapForCurrentSpec();
   groupedViolations.forEach((v) => {
     (v?.nodeDetails || []).forEach((n) => {
-      const k = nodeViolationKey(v.id, canonicalNodeTarget(n), n.pageUrl);
+      const k = nodeViolationKey(v.id, canonicalNodeTarget(n), n.pageUrl, v.findingType);
       if (!m.has(k)) {
         m.set(k, reportId);
       }
@@ -359,12 +389,15 @@ const severitySectionEmoji = (impact) => {
   }
 };
 
-const outcomeLabel = (violation = {}) =>
-  violation?.disposition === 'warn' ? 'WARNING' : 'FAIL';
+const outcomeLabel = (violation = {}) => {
+  if (violation?.disposition === 'incomplete') return 'INCOMPLETE (MANUAL REVIEW)';
+  return violation?.disposition === 'warn' ? 'WARNING' : 'FAIL';
+};
 
-const severitySectionTypeLabel = ({ failCount = 0, warnCount = 0 } = {}) => {
+const severitySectionTypeLabel = ({ failCount = 0, warnCount = 0, incompleteCount = 0 } = {}) => {
   if (Number(failCount) > 0) return 'VIOLATIONS';
   if (Number(warnCount) > 0) return 'WARNINGS';
+  if (Number(incompleteCount) > 0) return 'INCOMPLETE (MANUAL REVIEW)';
   return 'VIOLATIONS';
 };
 
@@ -500,57 +533,102 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
   const currentTestNodeKeys = new Set();
   let previousSeverity = null;
   let hasLoggedGroupInSeverity = false;
+  let previousDispositionBucket = null;
   const sourceRectMap = liveSourceRectMap(rawResults);
+  const severitySummaries = groupedViolations.reduce((acc, item) => {
+    const severityKey = String(item?.impact || '').toLowerCase();
+    if (!acc[severityKey]) {
+      acc[severityKey] = {
+        failGroups: 0,
+        warnGroups: 0,
+        incompleteGroups: 0,
+        issueGroups: 0,
+        issueNodes: 0,
+        incompleteNodes: 0,
+      };
+    }
+    const summary = acc[severityKey];
+    const nodeCount = Number(item?.uniqueNodeCount || 0);
+    if (item?.disposition === 'incomplete') {
+      summary.incompleteGroups += 1;
+      summary.incompleteNodes += nodeCount;
+    } else {
+      summary.issueGroups += 1;
+      summary.issueNodes += nodeCount;
+      if (item?.disposition === 'warn') {
+        summary.warnGroups += 1;
+      } else {
+        summary.failGroups += 1;
+      }
+    }
+    return acc;
+  }, {});
 
   groupedViolations.forEach((violation, violationIndex) => {
     const badge = severityBadge(violation.impact);
     const colorMark = severityColorMark(violation.impact);
     const severityKey = String(violation.impact || '').toLowerCase();
+    const severitySummary = severitySummaries[severityKey] || {
+      failGroups: 0,
+      warnGroups: 0,
+      incompleteGroups: 0,
+      issueGroups: 0,
+      issueNodes: 0,
+      incompleteNodes: 0,
+    };
 
     if (severityKey !== previousSeverity) {
-      const sectionEmoji = severitySectionEmoji(violation.impact);
-      const violationsForSeverity = groupedViolations.filter(
-        (item) => String(item?.impact || '').toLowerCase() === severityKey
-      );
-      const totalGroupsForSeverity = violationsForSeverity.length;
-      const totalNodesForSeverity = violationsForSeverity.reduce(
-        (acc, item) => acc + Number(item?.uniqueNodeCount || 0),
-        0
-      );
-      const warnGroupsForSeverity = violationsForSeverity.filter(
-        (item) => item?.disposition === 'warn'
-      ).length;
-      const failGroupsForSeverity = totalGroupsForSeverity - warnGroupsForSeverity;
-      const sectionTypeLabel = severitySectionTypeLabel({
-        failCount: failGroupsForSeverity,
-        warnCount: warnGroupsForSeverity,
-      });
-      const sectionMessage = `────── ${sectionEmoji} ${sectionTypeLabel} - ${badge} (FAIL:${failGroupsForSeverity} | WARN:${warnGroupsForSeverity} | N:${totalNodesForSeverity}) ${sectionEmoji} ──────`;
-      Cypress.log({
-        name: '',
-        message: sectionMessage,
-        consoleProps: () => ({
-          type: 'severity-section',
-          severity: severityKey,
-          severityBadge: badge,
-          sectionType: sectionTypeLabel,
-          totalViolationsInSeverity: totalGroupsForSeverity,
-          totalNodesAffectedInSeverity: totalNodesForSeverity,
-          groupedViolationsForSeverity: violationsForSeverity.map((item) => ({
-            id: item.id,
-            help: item.help,
-            impact: item.impact,
-            disposition: item.disposition || 'fail',
-            uniqueNodeCount: item.uniqueNodeCount,
-            totalOccurrences: item.totalOccurrences,
-            phases: item.phases,
-          })),
-          message: sectionMessage,
-        }),
-      });
       previousSeverity = severityKey;
       hasLoggedGroupInSeverity = false;
-    } else if (hasLoggedGroupInSeverity) {
+      previousDispositionBucket = null;
+    }
+    const currentDispositionBucket = violation?.disposition === 'incomplete' ? 'incomplete' : 'issues';
+    if (currentDispositionBucket !== previousDispositionBucket) {
+      const sectionEmoji = severitySectionEmoji(violation.impact);
+      const analysisMeta = rawResults?.meta?.analysis || {};
+      const includedSet = new Set(
+        (analysisMeta.configuredIncludedImpactLevels || []).map((s) => String(s || '').toLowerCase())
+      );
+      const warnSet = new Set(
+        (analysisMeta.configuredWarnImpactLevels || []).map((s) => String(s || '').toLowerCase())
+      );
+      const issuePolicyLabel = warnSet.has(severityKey) && !includedSet.has(severityKey)
+        ? 'WARNINGS'
+        : 'VIOLATIONS';
+      const issueSummaryLabel = severitySummary.failGroups > 0
+        ? 'VIOLATION-ISSUES'
+        : severitySummary.warnGroups > 0
+          ? 'WARNING-ISSUES'
+          : 'ISSUES';
+      const sectionMessage = currentDispositionBucket === 'incomplete'
+        ? `────── ${sectionEmoji} INCOMPLETE - ${badge} (INCOMPLETE:${severitySummary.incompleteGroups} | N:${severitySummary.incompleteNodes})`
+        : `────── ${sectionEmoji} ${issuePolicyLabel} - ${badge} (${issueSummaryLabel}:${severitySummary.issueGroups} | N:${severitySummary.issueNodes})`;
+      const shouldShowSection = currentDispositionBucket === 'incomplete'
+        ? severitySummary.incompleteGroups > 0
+        : severitySummary.issueGroups > 0;
+      if (shouldShowSection) {
+        Cypress.log({
+          name: '',
+          message: sectionMessage,
+          consoleProps: () => ({
+            type: currentDispositionBucket === 'incomplete' ? 'severity-incomplete-section' : 'severity-issues-section',
+            severity: severityKey,
+            severityBadge: badge,
+            sectionType: currentDispositionBucket === 'incomplete' ? 'INCOMPLETE' : issuePolicyLabel,
+            failGroupsInSeverity: severitySummary.failGroups,
+            warnGroupsInSeverity: severitySummary.warnGroups,
+            incompleteGroupsInSeverity: severitySummary.incompleteGroups,
+            issueGroupsInSeverity: severitySummary.issueGroups,
+            issueNodesInSeverity: severitySummary.issueNodes,
+            incompleteNodesInSeverity: severitySummary.incompleteNodes,
+            issueSummaryLabel,
+            message: sectionMessage,
+          }),
+        });
+      }
+      hasLoggedGroupInSeverity = false;
+    }
+    if (hasLoggedGroupInSeverity && currentDispositionBucket === previousDispositionBucket) {
       const groupDividerMessage = '·   ·   ·   ·   ·';
       Cypress.log({
         name: '',
@@ -586,7 +664,7 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
     });
     const repeatedNodesInGroup = (violation.nodeDetails || []).filter((node) =>
       previouslySeenNodeKeys.has(
-        nodeViolationKey(violation.id, canonicalNodeTarget(node), node.pageUrl)
+        nodeViolationKey(violation.id, canonicalNodeTarget(node), node.pageUrl, violation.findingType)
       )
     ).length;
     const repeatedGroupSuffix =
@@ -614,21 +692,19 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
     const missingNodesCount = nodesWithDomState.filter((entry) => entry.isMissingFromDom).length;
     const hiddenNodesCount = nodesWithDomState.filter((entry) => entry.isInDomButHidden).length;
     const totalNodesCount = nodesWithDomState.length;
-    let missingGroupElementsSuffix = '';
-    if (totalNodesCount > 0 && unavailableNodesCount === totalNodesCount) {
-      missingGroupElementsSuffix = ` [⚠️UNAVAIL:${unavailableNodesCount}/${totalNodesCount}]`;
-    } else if (unavailableNodesCount > 0) {
-      missingGroupElementsSuffix = ` [⚠️UNAVAIL:${unavailableNodesCount}/${totalNodesCount}]`;
-    }
+    const noDomGroupSuffix = missingNodesCount > 0 ? ` [⚠️NO-DOM:${missingNodesCount}]` : '';
+    const hiddenGroupSuffix = hiddenNodesCount > 0 ? ` [⚠️HIDDEN:${hiddenNodesCount}]` : '';
+    const missingGroupElementsSuffix = `${noDomGroupSuffix}${hiddenGroupSuffix}`;
 
     Cypress.log({
-      name: `${colorMark} A11Y`,
+      name: violation?.disposition === 'incomplete' ? `${colorMark} A11Y-INCOMPLETE` : `${colorMark} A11Y`,
       message: `#${violationIndex + 1} [${badge}] [${outcomeLabel(violation)}] ${violation.id} - ${violation.help} (NODES:${violation.uniqueNodeCount})${repeatedGroupSuffix}${missingGroupElementsSuffix}`,
       $el: groupElements,
       consoleProps: () => ({
         ruleId: violation.id,
         severity: violation.impact,
         disposition: violation.disposition || 'fail',
+        findingType: violation.findingType || 'violation',
         help: violation.help,
         helpUrl: violation.helpUrl,
         description: violation.description,
@@ -649,6 +725,7 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
       }),
     });
     hasLoggedGroupInSeverity = true;
+    previousDispositionBucket = currentDispositionBucket;
 
     nodesWithDomState.forEach(
       (
@@ -662,7 +739,12 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         },
         nodeIndex
       ) => {
-        const nodeKey = nodeViolationKey(violation.id, canonicalNodeTarget(node), node.pageUrl);
+        const nodeKey = nodeViolationKey(
+          violation.id,
+          canonicalNodeTarget(node),
+          node.pageUrl,
+          violation.findingType
+        );
         const wasSeenInPreviousTest = previouslySeenNodeKeys.has(nodeKey);
         const firstSpecReportIdForKey = wasSeenInPreviousTest
           ? getNodeFirstReportIdMapForCurrentSpec().get(nodeKey)
@@ -837,6 +919,7 @@ Cypress.Commands.add('getLiveA11yResults', () => {
 Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
   const { outputPath, reportMeta } = buildLiveA11yOutputPathAndMeta(options.outputPath);
   const throwOnValidationFailure = options.throwOnValidationFailure !== false;
+  const includeIncompleteInReport = resolveIncludeIncompleteInReport(options);
   const validation = {
     enabled: true,
     requireInitialScan: true,
@@ -859,6 +942,7 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
         validation,
         reportMeta,
         repeatInfo: { previousNodeKeys, firstReportIdByKey },
+        includeIncompleteInReport,
         deferValidationFailure: true,
       },
       { log: false }
@@ -867,6 +951,8 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
       recordFirstReportIdsFromGroupedReport(report?.groupedViolations, rid);
       resetGhostOverlay();
       const groupedBySeverity = report.counts.groupedBySeverity || {};
+      const groupedBySeverityIssues = report.counts.groupedBySeverityIssues || {};
+      const groupedBySeverityIncomplete = report.counts.groupedBySeverityIncomplete || {};
       const groupedByDisposition = report.counts.groupedByDisposition || {};
       const reportSummary = report?.summary || {};
       const technicalOrder = Array.isArray(reportSummary?.technicalOrder) && reportSummary.technicalOrder.length > 0
@@ -877,21 +963,29 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
       const summaryForConsole = {
         initialScans: report.counts.initialScans,
         initialViolations: report.counts.initialViolations,
+        initialIncomplete: report.counts.initialIncomplete || 0,
         initialDistinctNodesWithViolations: report.counts.initialNodesWithViolations || 0,
+        initialDistinctNodesWithIncomplete: report.counts.initialNodesWithIncomplete || 0,
         liveScans: report.counts.liveScans,
         liveViolations: report.counts.liveViolations,
+        liveIncomplete: report.counts.liveIncomplete || 0,
         liveDistinctNodesWithViolations: report.counts.liveNodesWithViolations || 0,
+        liveDistinctNodesWithIncomplete: report.counts.liveNodesWithIncomplete || 0,
         droppedScans: report.meta?.dropped || 0,
         monitorErrors: report.errors?.length || 0,
-        groupedViolations: report.counts.groupedViolations,
+        groupedIssues: report.counts.groupedViolations,
+        groupedIncomplete: report.counts.groupedIncomplete || 0,
+        groupedFindingsTotal: report.counts.groupedFindingsTotal || 0,
         severityCounts: groupedBySeverity,
+        severityIssueCounts: groupedBySeverityIssues,
+        severityIncompleteCounts: groupedBySeverityIncomplete,
         outcomeCounts: groupedByDisposition,
         technicalMetrics,
       };
-      cy.log('──────────── 📊 𝗩𝗜𝗢𝗟𝗔𝗧𝗜𝗢𝗡 𝗦𝗨𝗠𝗠𝗔𝗥𝗬 📊 ────────────');
+      cy.log('════════════ 📊 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗦𝗨𝗠𝗠𝗔𝗥𝗬 ════════════');
       Cypress.log({
         name: '',
-        message: '──────────── 📝 𝗩𝗜𝗢𝗟𝗔𝗧𝗜𝗢𝗡 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 (𝗰𝗼𝗻𝘀𝗼𝗹𝗲 𝗽𝗿𝗼𝗽𝘀) 📝 ────────────',
+        message: '════════════ 📝 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 (𝗰𝗼𝗻𝘀𝗼𝗹𝗲 𝗽𝗿𝗼𝗽𝘀) ════════════',
 
         consoleProps: () => summaryForConsole,
       });
@@ -900,9 +994,19 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
         : ['critical', 'serious', 'moderate', 'minor'];
       const ar = report?.reportArtifact || {};
       severityOrder.forEach((severity) => {
-        const count = Number(groupedBySeverity?.[severity] ?? 0);
+        const issuesCount = Number(groupedBySeverityIssues?.[severity] ?? 0);
+        const incompleteCount = Number(groupedBySeverityIncomplete?.[severity] ?? 0);
+        const failCount = Number(report?.counts?.groupedBySeverityDisposition?.[severity]?.fail || 0);
+        const warnCount = Number(report?.counts?.groupedBySeverityDisposition?.[severity]?.warn || 0);
+        const issueSummaryLabel = failCount > 0
+          ? 'VIOLATION-ISSUES'
+          : warnCount > 0
+            ? 'WARNING-ISSUES'
+            : 'ISSUES';
         const label = severitySummaryLabel(severity, report?.impactPolicy || {});
-        cy.log(`• ${label} ${severityColorMark(severity)} : ${count}`);
+        cy.log(
+          `• ${label} ${severityColorMark(severity)} : ${issueSummaryLabel}:${issuesCount} | INCOMPLETE:${incompleteCount}`
+        );
       });
       logGroupedViolations(report.groupedViolations, report.raw);
       cy.log('· · · · ·');
@@ -1004,6 +1108,7 @@ const logLiveA11yValidationMarker = ({
   validationErrors = [],
   failCount = 0,
   warnCount = 0,
+  incompleteCount = 0,
   markedFailed = false,
   isValid = false,
 }) => {
@@ -1015,8 +1120,8 @@ const logLiveA11yValidationMarker = ({
   const shortErrors = (validationErrors || []).slice(0, 3);
   const shortErrorsLabel = shortErrors.length > 0 ? shortErrors.join(' | ') : 'Unknown validation error';
   const message = isValid
-    ? `${testKey} | fail-groups:${failCount} | warn-groups:${warnCount} | no failing violations`
-    : `${testKey} | fail-groups:${failCount} | warn-groups:${warnCount} | ${shortErrorsLabel}`;
+    ? `${testKey} | fail-groups:${failCount} | warn-groups:${warnCount} | incomplete-groups:${incompleteCount} | no failing violations`
+    : `${testKey} | fail-groups:${failCount} | warn-groups:${warnCount} | incomplete-groups:${incompleteCount} | ${shortErrorsLabel}`;
   Cypress.log({
     name: prefix,
     message,
@@ -1024,6 +1129,7 @@ const logLiveA11yValidationMarker = ({
       test: testKey,
       failGroups: failCount,
       warnGroups: warnCount,
+      incompleteGroups: incompleteCount,
       reportPath,
       validationErrors,
       note: markedFailed
@@ -1135,12 +1241,20 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       this.currentTest?.fullTitle?.() ||
       this.currentTest?.title ||
       'unknown-test';
+    const runtimeSetupOptions = Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY) || {};
     const runtimeReportOptions = Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY) || {};
+    const includeIncompleteInReport = resolveIncludeIncompleteInReport(
+      runtimeSetupOptions,
+      setupOptions,
+      runtimeReportOptions,
+      reportOptions
+    );
     Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY, undefined);
     Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY, undefined);
     const resolvedReportOptions = {
       ...reportOptions,
       ...runtimeReportOptions,
+      includeIncompleteInReport,
       validation: {
         ...(reportOptions.validation || {}),
         ...(runtimeReportOptions.validation || {}),
@@ -1168,6 +1282,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     }).then((report) => {
       const failCount = Number(report?.counts?.groupedByDisposition?.fail || 0);
       const warnCount = Number(report?.counts?.groupedByDisposition?.warn || 0);
+      const incompleteCount = Number(report?.counts?.groupedByDisposition?.incomplete || 0);
       if (report?.validation?.valid) {
         pendingValidationFailuresByTest.delete(testKey);
         logLiveA11yValidationMarker({
@@ -1175,6 +1290,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
           reportPath: report?.reportArtifact?.relativePath || report?.savedTo || 'unknown report path',
           failCount,
           warnCount,
+          incompleteCount,
           isValid: true,
         });
         return;
@@ -1190,6 +1306,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
         reportPath,
         validationErrors,
         failCount,
+        incompleteCount,
       });
       logLiveA11yValidationMarker({
         testKey,
@@ -1197,6 +1314,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
         validationErrors,
         failCount,
         warnCount,
+        incompleteCount,
         markedFailed: Boolean(failTestOnValidationError),
       });
       if (!failTestOnValidationError) {

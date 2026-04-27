@@ -74,15 +74,27 @@ const severityClass = (impact) => {
 };
 
 const dispositionClass = (disposition) =>
-  String(disposition || "").toLowerCase() === "warn" ? "disp-warn" : "disp-fail";
+  String(disposition || "").toLowerCase() === "warn"
+    ? "disp-warn"
+    : String(disposition || "").toLowerCase() === "incomplete"
+      ? "disp-incomplete"
+      : "disp-fail";
 
 const dispositionLabel = (disposition) =>
-  String(disposition || "").toLowerCase() === "warn" ? "DOES NOT FAIL TEST" : "FAILS TEST";
+  String(disposition || "").toLowerCase() === "warn"
+    ? "DOES NOT FAIL TEST"
+    : String(disposition || "").toLowerCase() === "incomplete"
+      ? "MANUAL REVIEW RECOMMENDED"
+      : "FAILS TEST";
 
 const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}, impactPolicy = {}) => {
   const entry = groupedBySeverityDisposition?.[severity];
+  if (entry?.sectionType === "incomplete") return "INCOMPLETE";
   if (entry?.sectionType === "warning") return "WARNINGS";
   if (entry?.sectionType === "violation") return "VIOLATIONS";
+  if (Number(entry?.incomplete || 0) > 0 && Number(entry?.warn || 0) === 0 && Number(entry?.fail || 0) === 0) {
+    return "INCOMPLETE";
+  }
   if (Number(entry?.warn || 0) > 0 && Number(entry?.fail || 0) === 0) return "WARNINGS";
   const normalizedSeverity = String(severity || "").toLowerCase();
   const included = new Set(
@@ -319,12 +331,21 @@ const renderNodeRows = (nodeDetails, ruleId) => {
 };
 
 const renderViolationCard = (v) => {
+  const findingType = String(v.findingType || "violation").toLowerCase();
+  const findingTypeBadge = findingType === "incomplete"
+    ? `<span class="finding-type-badge finding-type-incomplete">INCOMPLETE - MANUAL REVIEW</span>`
+    : "";
+  const manualReviewNote = findingType === "incomplete"
+    ? `<p class="meta incomplete-note">This finding was reported by axe-core as <strong>incomplete</strong> and should be reviewed manually.</p>`
+    : "";
   return `
   <article class="violation" id="rule-${escapeHtml(v.id)}">
     <header>
       <span class="badge ${severityClass(v.impact)}">${escapeHtml(v.impact || "n/a")}</span>
+      ${findingTypeBadge}
       <h3><code class="violation-rule-id">${escapeHtml(v.id)}</code></h3>
     </header>
+    ${manualReviewNote}
     ${renderA11yRuleReference(v)}
     <p class="meta violation-stats">
       <strong>${Number(v.uniqueNodeCount || 0)}</strong> unique node(s) ·
@@ -337,6 +358,15 @@ const renderViolationCard = (v) => {
       </tbody>
     </table>
   </article>`;
+};
+
+const renderSeverityBucket = (title, cards = [], kind = "issues") => {
+  if (!Array.isArray(cards) || cards.length === 0) return "";
+  const cssClass = kind === "incomplete" ? "sev-subsection sev-subsection-incomplete" : "sev-subsection";
+  return `<section class="${cssClass}">
+    <h3 class="sev-subsection-title">${escapeHtml(title)}</h3>
+    ${cards.map(renderViolationCard).join("\n")}
+  </section>`;
 };
 
 const chunkIntoRows = (items = [], rowSize = 3) => {
@@ -376,7 +406,6 @@ const buildFallbackDuplicateStats = (groupedViolations = []) => {
 const renderLiveA11yReportHtml = (report) => {
   const counts = report.counts || {};
   const artifact = report.reportArtifact || {};
-  const bySev = counts.groupedBySeverity || {};
   const bySevDisposition = counts.groupedBySeverityDisposition || {};
   const sevOrder = report.severityOrder || ["critical", "serious", "moderate", "minor"];
   const violations = report.groupedViolations || [];
@@ -593,9 +622,13 @@ const renderLiveA11yReportHtml = (report) => {
 
   const sevPills = severityTotalsOrder
     .map((s) => {
-      const n = bySev[s] ?? 0;
+      const sevEntry = bySevDisposition?.[s] || {};
+      const failCount = Number(sevEntry.fail || 0);
+      const warnCount = Number(sevEntry.warn || 0);
+      const incompleteCount = Number(sevEntry.incomplete || 0);
+      const issuesCount = failCount + warnCount;
       const sectionType = severitySectionTypeLabel(s, bySevDisposition, report.impactPolicy || {});
-      return `<a class="sev-pill ${severityClass(s)}" href="#sev-${escapeHtml(s)}">${sectionType} - ${escapeHtml(s)}: ${n}</a>`;
+      return `<a class="sev-pill ${severityClass(s)}" href="#sev-${escapeHtml(s)}">${sectionType} - ${escapeHtml(s)}: ISSUES ${issuesCount} | INCOMPLETE ${incompleteCount}</a>`;
     })
     .join(" ");
 
@@ -612,31 +645,67 @@ const renderLiveA11yReportHtml = (report) => {
       <div class="analysis-option-row">
         <span class="analysis-option-label">Impacts that warn only</span>
         <span class="analysis-option-values">${renderOptionPills(configuredWarnImpactLevels) || '<span class="subtle">None</span>'}</span>
+      </div>
+      <div class="analysis-option-row">
+        <span class="analysis-option-label">Include incomplete findings</span>
+        <span class="analysis-option-values">${report?.reportOptions?.includeIncompleteInReport ? "Yes" : "No (default)"}</span>
       </div>`;
 
   const bySeveritySections = sevOrder
     .map((sev) => {
       const list = violations.filter((v) => String(v.impact || "").toLowerCase() === sev);
       if (list.length === 0) return "";
-      const sectionType = severitySectionTypeLabel(sev, bySevDisposition, report.impactPolicy || {});
-      const sectionDisposition = sectionType === "WARNINGS" ? "warn" : "fail";
+      const issueCards = list.filter((v) => String(v?.disposition || "").toLowerCase() !== "incomplete");
+      const incompleteCards = list.filter((v) => String(v?.disposition || "").toLowerCase() === "incomplete");
+      const sectionCounts = bySevDisposition?.[sev] || {};
+      const failCount = Number(sectionCounts.fail || 0);
+      const warnCount = Number(sectionCounts.warn || 0);
+      const incompleteCount = Number(sectionCounts.incomplete || 0);
+      const normalizedSeverity = String(sev || "").toLowerCase();
+      const included = new Set(
+        Array.isArray(report?.impactPolicy?.included)
+          ? report.impactPolicy.included.map((level) => String(level).toLowerCase())
+          : []
+      );
+      const warn = new Set(
+        Array.isArray(report?.impactPolicy?.warn)
+          ? report.impactPolicy.warn.map((level) => String(level).toLowerCase())
+          : []
+      );
+      const checkedAsWarnings = warn.has(normalizedSeverity) && !included.has(normalizedSeverity);
+      const sectionDisposition = checkedAsWarnings ? "warn" : "fail";
+      const issueCount = failCount + warnCount;
+      const sectionPolicyLabel = checkedAsWarnings ? "Checked as warnings" : "Checked as violations";
+      const issueBucketTitle = checkedAsWarnings
+        ? "Warning issues (does not fail test)"
+        : "Violation issues (fails test)";
+      const issueSummaryLabel = checkedAsWarnings
+        ? "WARNING ISSUES"
+        : "VIOLATION ISSUES";
+      const sectionBody = [
+        renderSeverityBucket(issueBucketTitle, issueCards, "issues"),
+        renderSeverityBucket("Incomplete (manual review)", incompleteCards, "incomplete"),
+      ].filter(Boolean).join("\n");
       return `
   <section class="sev-block ${severityClass(sev)}-section" id="sev-${escapeHtml(sev)}" aria-labelledby="sev-${escapeHtml(sev)}-heading">
     <header class="sev-block-header">
       <div>
-        <p class="sev-block-eyebrow">${String(sev).toUpperCase()} severity section</p>
-        <h2 id="sev-${escapeHtml(sev)}-heading">
+        <h2 class="sev-block-title" id="sev-${escapeHtml(sev)}-heading">
+          <span class="sev-block-title-label">Severity section</span>
           <span class="badge ${severityClass(sev)}">${escapeHtml(sev)}</span>
+        </h2>
+        <p class="sev-policy-line">
+          <span class="sev-policy-chip">${escapeHtml(sectionPolicyLabel)}</span>
           <span class="outcome-badge ${dispositionClass(sectionDisposition)}">${escapeHtml(
         dispositionLabel(sectionDisposition)
       )}</span>
-          <span>${list.length} grouped rule(s)</span>
-        </h2>
+        </p>
+        <p class="sev-breakdown subtle">${issueSummaryLabel}: ${issueCount} · INCOMPLETE: ${incompleteCount}</p>
       </div>
       <a class="sev-block-top-link" href="#top">Back to summary</a>
     </header>
     <div class="sev-block-body">
-      ${list.map(renderViolationCard).join("\n")}
+      ${sectionBody}
     </div>
     <div class="sev-block-end" aria-hidden="true">End of ${String(sev).toUpperCase()} severity section (${escapeHtml(
         dispositionLabel(sectionDisposition).toLowerCase()
@@ -906,11 +975,20 @@ const renderLiveA11yReportHtml = (report) => {
       letter-spacing: 0.08em;
       text-transform: uppercase;
     }
-    .sev-block h2 {
+    .sev-block-title {
       display: flex;
       align-items: center;
       gap: 0.6rem;
       flex-wrap: wrap;
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .sev-block-title-label {
+      color: var(--muted);
+      font-size: 0.86rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
     }
     .sev-block-top-link {
       flex: 0 0 auto;
@@ -925,6 +1003,20 @@ const renderLiveA11yReportHtml = (report) => {
     .sev-block-top-link:hover { color: var(--link); border-color: var(--link); }
     .sev-block-body {
       padding: 1rem 1rem 0.15rem;
+    }
+    .sev-subsection {
+      margin-bottom: 1rem;
+    }
+    .sev-subsection-title {
+      margin: 0.15rem 0 0.6rem;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .sev-subsection-incomplete .sev-subsection-title {
+      color: #c4b5fd;
     }
     .sev-block-end {
       margin: 0.25rem 1rem 1rem;
@@ -984,6 +1076,49 @@ const renderLiveA11yReportHtml = (report) => {
       color: #e3b341;
       border-color: rgba(227, 179, 65, 0.45);
     }
+    .disp-incomplete {
+      background: rgba(123, 92, 255, 0.16);
+      color: #c4b5fd;
+      border-color: rgba(123, 92, 255, 0.5);
+    }
+    .finding-type-badge {
+      font-size: 0.66rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      font-weight: 700;
+    }
+    .finding-type-incomplete {
+      background: rgba(123, 92, 255, 0.16);
+      color: #c4b5fd;
+      border-color: rgba(123, 92, 255, 0.5);
+    }
+    .incomplete-note {
+      margin: 0.35rem 0 0.55rem;
+      color: #c4b5fd;
+    }
+    .sev-policy-line {
+      margin: 0.35rem 0 0;
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+    }
+    .sev-policy-chip {
+      display: inline-block;
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      padding: 0.12rem 0.45rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      background: rgba(13, 17, 23, 0.45);
+      font-weight: 700;
+    }
+    .sev-breakdown { margin: 0.45rem 0 0; font-size: 0.88rem; }
     .help { margin: 0.5rem 0; }
     .meta { font-size: 0.9rem; color: var(--muted); }
     .tag { display: inline-block; background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.88rem; margin: 0.1rem; }
@@ -1124,7 +1259,7 @@ const renderLiveA11yReportHtml = (report) => {
   <a href="#main-content" class="skip-link">Skip to report content</a>
   <main class="wrap" id="main-content">
     <h1 id="top">wick-a11y-observer accessibility report</h1>
-    <p class="subtle">Readable summary of grouped axe-core violations (initial + live). Open <strong>Rule docs</strong> for remediation.</p>
+    <p class="subtle">Readable summary of grouped axe-core findings (violations and optional incomplete/manual-review items). Open <strong>Rule docs</strong> for remediation.</p>
     <div class="summary-groups" aria-label="Top summary sections">
       <section class="summary-group summary-group-identity" aria-label="Report identity">
         <h2>Report Identity</h2>
@@ -1153,10 +1288,10 @@ const renderLiveA11yReportHtml = (report) => {
         </details>
       </section>
     </div>
-    <h2 class="severity-entry-title">By severity (grouped rules)</h2>
-    <div class="sev-pills">${sevPills || "<span class=\"subtle\">No violations in grouped output.</span>"}</div>
+    <h2 class="severity-entry-title">By severity (grouped findings)</h2>
+    <div class="sev-pills">${sevPills || "<span class=\"subtle\">No grouped findings in output.</span>"}</div>
     ${errorsBlock}
-    ${bySeveritySections || "<p class=\"subtle\">No violations to show.</p>"}
+    ${bySeveritySections || "<p class=\"subtle\">No grouped findings to show.</p>"}
     <footer>
       <p>Generated for interactive review — keep JSON for machine use.</p>
       <p class="report-footnote">${footnoteHtml}</p>

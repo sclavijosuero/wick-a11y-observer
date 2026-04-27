@@ -58,6 +58,7 @@ export interface SetupLiveA11yMonitorOptions {
   initialAxeOptions?: LiveA11yRunOptions;
   liveAxeOptions?: LiveA11yRunOptions;
   observerOptions?: LiveA11yObserverOptions;
+  includeIncompleteInReport?: boolean;
 }
 
 export interface RunInitialLiveA11yScanCommandOptions {
@@ -89,6 +90,7 @@ export interface ReportLiveA11yResultsOptions {
   outputPath?: string;
   validation?: ReportLiveA11yValidationOptions;
   throwOnValidationFailure?: boolean;
+  includeIncompleteInReport?: boolean;
 }
 
 export interface LiveA11yAutoLifecycleInitialScanOptions {
@@ -169,29 +171,49 @@ export interface LiveA11yReport {
   counts: {
     initialScans: number;
     initialViolations: number;
+    initialIncomplete?: number;
     initialNodesWithViolations: number;
+    initialNodesWithIncomplete?: number;
     liveScans: number;
     liveViolations: number;
+    liveIncomplete?: number;
     liveNodesWithViolations: number;
+    liveNodesWithIncomplete?: number;
     liveDistinctViolationInstancesExcludingInitial?: number;
+    liveDistinctIncompleteInstancesExcludingInitial?: number;
     liveDistinctNodesWithIssuesExcludingInitial?: number;
+    liveDistinctNodesWithIncompleteExcludingInitial?: number;
     totalViolationsInitialPlusLiveDistinct?: number;
+    totalIncompleteInitialPlusLiveDistinct?: number;
     totalNodesInitialPlusLiveDistinct?: number;
+    totalNodesIncompleteInitialPlusLiveDistinct?: number;
     groupedViolations: number;
+    groupedIncomplete?: number;
+    groupedFindingsTotal?: number;
     groupedBySeverity: Partial<Record<"critical" | "serious" | "moderate" | "minor", number>>;
+    groupedBySeverityIssues?: Partial<Record<"critical" | "serious" | "moderate" | "minor", number>>;
+    groupedBySeverityIncomplete?: Partial<Record<"critical" | "serious" | "moderate" | "minor", number>>;
     groupedBySeverityDisposition?: Partial<
       Record<
         "critical" | "serious" | "moderate" | "minor",
-        { fail: number; warn: number; sectionType: "violation" | "warning" | "none" }
+        {
+          fail: number;
+          warn: number;
+          incomplete?: number;
+          sectionType: "violation" | "warning" | "incomplete" | "none";
+        }
       >
     >;
-    groupedByDisposition?: Partial<Record<"fail" | "warn", number>>;
+    groupedByDisposition?: Partial<Record<"fail" | "warn" | "incomplete", number>>;
   };
   severityOrder: string[];
   impactPolicy?: {
     included: Array<"critical" | "serious" | "moderate" | "minor">;
     warn: Array<"critical" | "serious" | "moderate" | "minor">;
     considered: Array<"critical" | "serious" | "moderate" | "minor">;
+  };
+  reportOptions?: {
+    includeIncompleteInReport?: boolean;
   };
   groupedViolations: LiveA11yGroupedViolation[];
   raw: LiveA11yStore;
@@ -231,6 +253,7 @@ export interface LiveA11yReport {
 }
 
 export interface LiveA11yGroupedViolation {
+  findingType?: "violation" | "incomplete" | string;
   id: string;
   impact: string;
   help?: string;
@@ -244,7 +267,7 @@ export interface LiveA11yGroupedViolation {
   nodes: string[];
   nodeDetails: LiveA11yGroupedNode[];
   uniqueNodeCount: number;
-  disposition?: "fail" | "warn";
+  disposition?: "fail" | "warn" | "incomplete";
   rawViolations: unknown[];
 }
 

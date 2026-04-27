@@ -22,9 +22,15 @@ const TECHNICAL_METRIC_ORDER = [
   "initialViolationsRaw",
   "liveDistinctViolationInstancesExcludingInitial",
   "totalViolationsInitialPlusLiveDistinct",
+  "initialIncompleteRaw",
+  "liveDistinctIncompleteInstancesExcludingInitial",
+  "totalIncompleteInitialPlusLiveDistinct",
   "initialDistinctNodesWithIssues",
   "liveDistinctNodesWithIssuesExcludingInitial",
   "totalNodesInitialPlusLiveDistinct",
+  "initialDistinctNodesWithIncomplete",
+  "liveDistinctNodesWithIncompleteExcludingInitial",
+  "totalNodesIncompleteInitialPlusLiveDistinct",
   "liveScansCaptured",
   "monitorDroppedScans",
   "monitorErrors",
@@ -51,6 +57,24 @@ const TECHNICAL_METRIC_HELP = {
       "Overall grouped violation total for this report: initial full-page rule groups + new live rule groups (excluding initial overlaps).",
     related: ["initialViolationsRaw", "liveDistinctViolationInstancesExcludingInitial"],
   },
+  initialIncompleteRaw: {
+    label: "Initial incomplete findings (raw rule groups)",
+    description:
+      "How many axe-core incomplete rule groups were found in the first full-page scan (manual-review findings).",
+    related: ["liveDistinctIncompleteInstancesExcludingInitial", "totalIncompleteInitialPlusLiveDistinct"],
+  },
+  liveDistinctIncompleteInstancesExcludingInitial: {
+    label: "Live distinct incomplete findings (excluding initial)",
+    description:
+      "How many NEW live incomplete rule groups were found, counted by rule + page, excluding groups already seen in the initial full-page scan.",
+    related: ["initialIncompleteRaw", "totalIncompleteInitialPlusLiveDistinct"],
+  },
+  totalIncompleteInitialPlusLiveDistinct: {
+    label: "Total incomplete findings (initial + live distinct)",
+    description:
+      "Overall grouped incomplete total for this report: initial full-page incomplete groups + new live incomplete groups (excluding initial overlaps).",
+    related: ["initialIncompleteRaw", "liveDistinctIncompleteInstancesExcludingInitial"],
+  },
   initialDistinctNodesWithIssues: {
     label: "Initial distinct nodes with issues",
     description:
@@ -68,6 +92,24 @@ const TECHNICAL_METRIC_HELP = {
     description:
       "Overall unique-node total: initial distinct nodes + new live distinct nodes (excluding initial overlaps).",
     related: ["initialDistinctNodesWithIssues", "liveDistinctNodesWithIssuesExcludingInitial"],
+  },
+  initialDistinctNodesWithIncomplete: {
+    label: "Initial distinct nodes with incomplete findings",
+    description:
+      "How many unique elements had incomplete findings in the initial full-page scan.",
+    related: ["liveDistinctNodesWithIncompleteExcludingInitial", "totalNodesIncompleteInitialPlusLiveDistinct"],
+  },
+  liveDistinctNodesWithIncompleteExcludingInitial: {
+    label: "Live distinct incomplete nodes (excluding initial)",
+    description:
+      "How many NEW unique elements had incomplete findings in live scans, excluding elements already seen as incomplete in the initial full-page scan.",
+    related: ["initialDistinctNodesWithIncomplete", "totalNodesIncompleteInitialPlusLiveDistinct"],
+  },
+  totalNodesIncompleteInitialPlusLiveDistinct: {
+    label: "Total incomplete nodes (initial + live distinct)",
+    description:
+      "Overall unique-node total for incomplete findings: initial distinct nodes + new live distinct nodes (excluding initial overlaps).",
+    related: ["initialDistinctNodesWithIncomplete", "liveDistinctNodesWithIncompleteExcludingInitial"],
   },
   liveScansCaptured: {
     label: "Live scans",
@@ -206,8 +248,8 @@ const normalizePageUrlKey = (u) => {
 const buildNodeIdentityKey = (target, pageUrl) =>
   `${String(target || "<unknown>")}@@${normalizePageUrlKey(pageUrl)}`;
 
-const buildRulePageKey = (ruleId, pageUrl) =>
-  `${String(ruleId || "<unknown-rule>")}@@${normalizePageUrlKey(pageUrl)}`;
+const buildRulePageKey = (ruleId, pageUrl, findingType = "violation") =>
+  `${String(findingType || "violation")}@@${String(ruleId || "<unknown-rule>")}@@${normalizePageUrlKey(pageUrl)}`;
 
 const buildRulePageKeysFromEntry = (entry) => {
   const pages = new Set(
@@ -216,9 +258,9 @@ const buildRulePageKeysFromEntry = (entry) => {
       .filter((value) => value !== "")
   );
   if (pages.size === 0) {
-    return [buildRulePageKey(entry?.id, "")];
+    return [buildRulePageKey(entry?.id, "", entry?.findingType)];
   }
-  return [...pages].map((pageUrl) => buildRulePageKey(entry?.id, pageUrl));
+  return [...pages].map((pageUrl) => buildRulePageKey(entry?.id, pageUrl, entry?.findingType));
 };
 
 const sameNodeIdentity = (a, b) => {
@@ -229,14 +271,13 @@ const sameNodeIdentity = (a, b) => {
 };
 
 /**
- * Same string as cypress/support/commands.js `nodeViolationKey` (rule + target + page).
- * @param {string} ruleId
+ * Same string as cypress/support/commands.js `nodeViolationKey` (target + page).
  * @param {string} [target]
  * @param {string} [pageUrl]
  * @returns {string}
  */
-const buildNodeRepeatKey = (ruleId, target, pageUrl) =>
-  `${ruleId}@@${target || "<unknown>"}@@${normalizePageUrlKey(pageUrl)}`;
+const buildNodeRepeatKey = (target, pageUrl) =>
+  `${target || "<unknown>"}@@${normalizePageUrlKey(pageUrl)}`;
 
 /**
  * Marks nodes that already appeared in an earlier `reportLiveA11yResults` in this spec (Cypress only).
@@ -256,7 +297,7 @@ const enrichNodesWithCrossReportRepeat = (groupedViolations, repeatInfo) => {
       continue;
     }
     for (const node of v.nodeDetails) {
-      const k = buildNodeRepeatKey(v.id, node.rawTarget || node.target, node.pageUrl);
+      const k = buildNodeRepeatKey(node.rawTarget || node.target, node.pageUrl);
       if (prev.has(k)) {
         node.repeatedFromEarlierReport = true;
         const rid = byKey[k];
@@ -335,13 +376,17 @@ const getConfiguredSeverities = (results) => {
   return SEVERITY_ORDER.filter((severity) => configuredSet.has(severity));
 };
 
-const toViolationDetails = (results) => {
+const findingResultTypeFor = (findingType) => (findingType === "incomplete" ? "incomplete" : "violations");
+
+const toFindingDetails = (results, findingType = "violation") => {
+  const resultType = findingResultTypeFor(findingType);
   const initialPage = normalizePageUrlKey(results?.initialPageUrl);
 
-  const initialViolations = (results?.initial?.violations || []).map((violation) => ({
+  const initialFindings = (results?.initial?.[resultType] || []).map((violation) => ({
     phase: "initial",
     source: "full-page",
     sourceLabel: "Initial scan (full page)",
+    findingType,
     id: violation.id,
     impact: violation.impact || "none",
     help: violation.help,
@@ -362,12 +407,13 @@ const toViolationDetails = (results) => {
     rawViolation: violation,
   }));
 
-  const liveViolations = (results?.live || []).flatMap((scan) => {
+  const liveFindings = (results?.live || []).flatMap((scan) => {
     const pageFromScan = normalizePageUrlKey(scan?.url);
-    return (scan?.results?.violations || []).map((violation) => ({
+    return (scan?.results?.[resultType] || []).map((violation) => ({
       phase: "live",
       source: `${scan.rootType || "unknown"}:${scan.rootId != null ? String(scan.rootId) : "n/a"}`,
       sourceLabel: formatLiveScanSourceLabel(scan),
+      findingType,
       id: violation.id,
       impact: violation.impact || "none",
       help: violation.help,
@@ -389,17 +435,19 @@ const toViolationDetails = (results) => {
     }));
   });
 
-  return [...initialViolations, ...liveViolations];
+  return [...initialFindings, ...liveFindings];
 };
 
 const groupViolations = (violationDetails) => {
   const byRule = new Map();
 
   violationDetails.forEach((violation) => {
-    let existing = byRule.get(violation.id);
+    const findingKey = `${String(violation.findingType || "violation")}@@${String(violation.id || "<unknown-rule>")}`;
+    let existing = byRule.get(findingKey);
 
     if (!existing) {
       existing = {
+        findingType: violation.findingType || "violation",
         id: violation.id,
         impact: violation.impact || "none",
         help: violation.help,
@@ -417,11 +465,12 @@ const groupViolations = (violationDetails) => {
           {
             phase: violation.phase,
             source: violation.source,
+            findingType: violation.findingType || "violation",
             raw: violation.rawViolation,
           },
         ],
       };
-      byRule.set(violation.id, existing);
+      byRule.set(findingKey, existing);
     } else {
       existing.totalOccurrences += 1;
 
@@ -439,6 +488,7 @@ const groupViolations = (violationDetails) => {
       existing.rawViolations.push({
         phase: violation.phase,
         source: violation.source,
+        findingType: violation.findingType || "violation",
         raw: violation.rawViolation,
       });
     }
@@ -489,19 +539,34 @@ const groupViolations = (violationDetails) => {
   return [...byRule.values()].sort((a, b) => {
     const severityDiff = severityRank(a.impact) - severityRank(b.impact);
     if (severityDiff !== 0) return severityDiff;
-    return a.id.localeCompare(b.id);
+    const aFindingRank = String(a.findingType || "violation") === "incomplete" ? 1 : 0;
+    const bFindingRank = String(b.findingType || "violation") === "incomplete" ? 1 : 0;
+    if (aFindingRank !== bFindingRank) return aFindingRank - bFindingRank;
+    if (a.id !== b.id) return a.id.localeCompare(b.id);
+    return String(a.findingType || "violation").localeCompare(String(b.findingType || "violation"));
   });
 };
 
-const buildLiveA11yReport = (results) => {
-  const violationDetails = toViolationDetails(results);
+const buildLiveA11yReport = (results, options = {}) => {
+  const includeIncompleteInReport = options?.includeIncompleteInReport === true;
+  const violationDetails = toFindingDetails(results, "violation");
+  const incompleteDetails = includeIncompleteInReport
+    ? toFindingDetails(results, "incomplete")
+    : [];
+  const findingDetails = [...violationDetails, ...incompleteDetails];
   const configuredSeverities = getConfiguredSeverities(results);
   const impactPolicy = getConfiguredImpactPolicy(results);
   const failSeverities = new Set(impactPolicy.included);
   const warnSeverities = new Set(impactPolicy.warn);
-  const groupedViolations = groupViolations(violationDetails).filter((violation) =>
+  const groupedViolations = groupViolations(findingDetails).filter((violation) =>
     configuredSeverities.includes(String(violation?.impact || "").toLowerCase())
   ).map((violation) => {
+    if (violation?.findingType === "incomplete") {
+      return {
+        ...violation,
+        disposition: "incomplete",
+      };
+    }
     const severity = String(violation?.impact || "").toLowerCase();
     const disposition = failSeverities.has(severity)
       ? "fail"
@@ -532,6 +597,25 @@ const buildLiveA11yReport = (results) => {
   const liveDistinctNodesWithIssuesExcludingInitial = new Set(
     [...liveNodesWithViolations].filter((key) => !initialNodesWithViolations.has(key))
   );
+  const initialNodesWithIncomplete = new Set(
+    incompleteDetails
+      .filter((entry) => entry.phase === "initial")
+      .flatMap((entry) =>
+        (entry.nodeDetails || []).map((node) => buildNodeIdentityKey(node?.target, node?.pageUrl))
+      )
+      .filter(Boolean)
+  );
+  const liveNodesWithIncomplete = new Set(
+    incompleteDetails
+      .filter((entry) => entry.phase === "live")
+      .flatMap((entry) =>
+        (entry.nodeDetails || []).map((node) => buildNodeIdentityKey(node?.target, node?.pageUrl))
+      )
+      .filter(Boolean)
+  );
+  const liveDistinctNodesWithIncompleteExcludingInitial = new Set(
+    [...liveNodesWithIncomplete].filter((key) => !initialNodesWithIncomplete.has(key))
+  );
   const initialRulePageKeys = new Set(
     violationDetails
       .filter((entry) => entry.phase === "initial")
@@ -547,8 +631,28 @@ const buildLiveA11yReport = (results) => {
   const liveDistinctViolationGroupsExcludingInitial = new Set(
     [...liveRulePageKeys].filter((key) => !initialRulePageKeys.has(key))
   );
+  const initialIncompleteRulePageKeys = new Set(
+    incompleteDetails
+      .filter((entry) => entry.phase === "initial")
+      .flatMap((entry) => buildRulePageKeysFromEntry(entry))
+      .filter(Boolean)
+  );
+  const liveIncompleteRulePageKeys = new Set(
+    incompleteDetails
+      .filter((entry) => entry.phase === "live")
+      .flatMap((entry) => buildRulePageKeysFromEntry(entry))
+      .filter(Boolean)
+  );
+  const liveDistinctIncompleteGroupsExcludingInitial = new Set(
+    [...liveIncompleteRulePageKeys].filter((key) => !initialIncompleteRulePageKeys.has(key))
+  );
   const liveViolationIds = new Set(
     violationDetails
+      .filter((entry) => entry.phase === "live")
+      .map((entry) => entry.id)
+  );
+  const liveIncompleteIds = new Set(
+    incompleteDetails
       .filter((entry) => entry.phase === "live")
       .map((entry) => entry.id)
   );
@@ -564,17 +668,44 @@ const buildLiveA11yReport = (results) => {
     );
     const fail = bySeverity.filter((violation) => violation.disposition === "fail").length;
     const warn = bySeverity.filter((violation) => violation.disposition === "warn").length;
+    const incomplete = bySeverity.filter((violation) => violation.disposition === "incomplete").length;
     acc[severity] = {
       fail,
       warn,
-      sectionType: fail > 0 ? "violation" : warn > 0 ? "warning" : "none",
+      incomplete,
+      sectionType: fail > 0
+        ? "violation"
+        : warn > 0
+          ? "warning"
+          : incomplete > 0
+            ? "incomplete"
+            : "none",
     };
     return acc;
   }, {});
   const groupedByDisposition = {
     fail: groupedViolations.filter((violation) => violation.disposition === "fail").length,
     warn: groupedViolations.filter((violation) => violation.disposition === "warn").length,
+    incomplete: groupedViolations.filter((violation) => violation.disposition === "incomplete").length,
   };
+  const groupedBySeverityIssues = configuredSeverities.reduce((acc, severity) => {
+    const bySeverity = groupedViolations.filter(
+      (violation) => String(violation?.impact || "").toLowerCase() === severity
+    );
+    acc[severity] = bySeverity.filter(
+      (violation) => violation.disposition === "fail" || violation.disposition === "warn"
+    ).length;
+    return acc;
+  }, {});
+  const groupedBySeverityIncomplete = configuredSeverities.reduce((acc, severity) => {
+    const bySeverity = groupedViolations.filter(
+      (violation) => String(violation?.impact || "").toLowerCase() === severity
+    );
+    acc[severity] = bySeverity.filter((violation) => violation.disposition === "incomplete").length;
+    return acc;
+  }, {});
+  const groupedFindingsTotal = groupedViolations.length;
+  const groupedIssuesTotal = groupedByDisposition.fail + groupedByDisposition.warn;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -583,25 +714,45 @@ const buildLiveA11yReport = (results) => {
     counts: {
       initialScans: results?.initial ? 1 : 0,
       initialViolations: results?.initial?.violations?.length || 0,
+      initialIncomplete: includeIncompleteInReport ? (results?.initial?.incomplete?.length || 0) : 0,
       initialNodesWithViolations: initialNodesWithViolations.size,
+      initialNodesWithIncomplete: initialNodesWithIncomplete.size,
       liveScans: results?.live?.length || 0,
       liveViolations: liveViolationIds.size,
+      liveIncomplete: liveIncompleteIds.size,
       liveNodesWithViolations: liveNodesWithViolations.size,
+      liveNodesWithIncomplete: liveNodesWithIncomplete.size,
       liveDistinctViolationInstancesExcludingInitial:
         liveDistinctViolationGroupsExcludingInitial.size,
+      liveDistinctIncompleteInstancesExcludingInitial:
+        liveDistinctIncompleteGroupsExcludingInitial.size,
       liveDistinctNodesWithIssuesExcludingInitial:
         liveDistinctNodesWithIssuesExcludingInitial.size,
+      liveDistinctNodesWithIncompleteExcludingInitial:
+        liveDistinctNodesWithIncompleteExcludingInitial.size,
       totalNodesInitialPlusLiveDistinct:
         initialNodesWithViolations.size + liveDistinctNodesWithIssuesExcludingInitial.size,
+      totalNodesIncompleteInitialPlusLiveDistinct:
+        initialNodesWithIncomplete.size + liveDistinctNodesWithIncompleteExcludingInitial.size,
       totalViolationsInitialPlusLiveDistinct:
         (results?.initial?.violations?.length || 0) + liveDistinctViolationGroupsExcludingInitial.size,
-      groupedViolations: groupedViolations.length,
+      totalIncompleteInitialPlusLiveDistinct:
+        (includeIncompleteInReport ? (results?.initial?.incomplete?.length || 0) : 0) +
+        liveDistinctIncompleteGroupsExcludingInitial.size,
+      groupedViolations: groupedIssuesTotal,
+      groupedIncomplete: groupedByDisposition.incomplete,
+      groupedFindingsTotal,
       groupedBySeverity: countsBySeverity,
+      groupedBySeverityIssues,
+      groupedBySeverityIncomplete,
       groupedBySeverityDisposition,
       groupedByDisposition,
     },
     severityOrder: configuredSeverities,
     impactPolicy,
+    reportOptions: {
+      includeIncompleteInReport,
+    },
     groupedViolations,
     raw: results,
   };
@@ -739,6 +890,7 @@ const buildCrossReportDuplicateStats = (groupedViolations = []) => {
 
   (Array.isArray(groupedViolations) ? groupedViolations : []).forEach((violation) => {
     const ruleId = String(violation?.id || "<unknown-rule>");
+    const findingType = String(violation?.findingType || "violation");
     (Array.isArray(violation?.nodeDetails) ? violation.nodeDetails : []).forEach((node) => {
       if (!node?.repeatedFromEarlierReport) {
         return;
@@ -746,7 +898,7 @@ const buildCrossReportDuplicateStats = (groupedViolations = []) => {
       const target = node?.rawTarget || node?.target;
       const nodeKey = buildNodeIdentityKey(target, node?.pageUrl);
       duplicateNodeKeys.add(nodeKey);
-      duplicateGroupedViolationKeys.add(buildRulePageKey(ruleId, node?.pageUrl));
+      duplicateGroupedViolationKeys.add(buildRulePageKey(ruleId, node?.pageUrl, findingType));
     });
   });
 
@@ -776,12 +928,26 @@ const buildReportSummary = (payload = {}) => {
     totalViolationsInitialPlusLiveDistinct: Number(
       counts.totalViolationsInitialPlusLiveDistinct || 0
     ),
+    initialIncompleteRaw: Number(counts.initialIncomplete || 0),
+    liveDistinctIncompleteInstancesExcludingInitial: Number(
+      counts.liveDistinctIncompleteInstancesExcludingInitial || 0
+    ),
+    totalIncompleteInitialPlusLiveDistinct: Number(
+      counts.totalIncompleteInitialPlusLiveDistinct || 0
+    ),
     initialDistinctNodesWithIssues: Number(counts.initialNodesWithViolations || 0),
     liveDistinctNodesWithIssuesExcludingInitial: Number(
       counts.liveDistinctNodesWithIssuesExcludingInitial || 0
     ),
     totalNodesInitialPlusLiveDistinct: Number(
       counts.totalNodesInitialPlusLiveDistinct || 0
+    ),
+    initialDistinctNodesWithIncomplete: Number(counts.initialNodesWithIncomplete || 0),
+    liveDistinctNodesWithIncompleteExcludingInitial: Number(
+      counts.liveDistinctNodesWithIncompleteExcludingInitial || 0
+    ),
+    totalNodesIncompleteInitialPlusLiveDistinct: Number(
+      counts.totalNodesIncompleteInitialPlusLiveDistinct || 0
     ),
     liveScansCaptured: Number(counts.liveScans || 0),
     monitorDroppedScans: Number(monitorMeta.dropped || 0),
@@ -818,9 +984,12 @@ const registerLiveA11yReporterTasks = (on) => {
       validation = {},
       reportMeta = undefined,
       repeatInfo = undefined,
+      includeIncompleteInReport = false,
       deferValidationFailure = false,
     }) {
-      const report = buildLiveA11yReport(results);
+      const report = buildLiveA11yReport(results, {
+        includeIncompleteInReport: includeIncompleteInReport === true,
+      });
       enrichNodesWithCrossReportRepeat(report.groupedViolations, repeatInfo);
       const validationResult = validateLiveA11yReport(report, validation);
       const absolutePath = path.resolve(outputPath);
