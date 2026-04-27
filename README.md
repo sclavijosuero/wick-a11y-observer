@@ -1,4 +1,4 @@
-# wick-a11y-observer Cypress API
+# wick-a11y-observer
 
 `wick-a11y-observer` adds continuous accessibility intelligence to your regular Cypress E2E flow, so you can catch issues while tests already run (without adding manual a11y-only test passes).
 

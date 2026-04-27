@@ -87,6 +87,11 @@ const dispositionLabel = (disposition) =>
       ? "MANUAL REVIEW RECOMMENDED"
       : "FAILS TEST";
 
+const severitySectionPolicyOutcomeLabel = (disposition) =>
+  String(disposition || "").toLowerCase() === "warn"
+    ? "Checked as warnings - DOES NOT FAIL TEST"
+    : "Checked as violations - FAILS TEST";
+
 const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}, impactPolicy = {}) => {
   const entry = groupedBySeverityDisposition?.[severity];
   if (entry?.sectionType === "incomplete") return "INCOMPLETE";
@@ -708,7 +713,6 @@ const renderLiveA11yReportHtml = (report) => {
       const checkedAsWarnings = warn.has(normalizedSeverity) && !included.has(normalizedSeverity);
       const sectionDisposition = checkedAsWarnings ? "warn" : "fail";
       const issueCount = failCount + warnCount;
-      const sectionPolicyLabel = checkedAsWarnings ? "Checked as warnings" : "Checked as violations";
       const issueBucketTitle = checkedAsWarnings
         ? "Warning issues (does not fail test)"
         : "Violation issues (fails test)";
@@ -733,9 +737,8 @@ const renderLiveA11yReportHtml = (report) => {
           <span class="badge ${severityClass(sev)}">${escapeHtml(sev)}</span>
         </h2>
         <p class="sev-policy-line">
-          <span class="sev-policy-chip">${escapeHtml(sectionPolicyLabel)}</span>
           <span class="outcome-badge ${dispositionClass(sectionDisposition)}">${escapeHtml(
-        dispositionLabel(sectionDisposition)
+        severitySectionPolicyOutcomeLabel(sectionDisposition)
       )}</span>
         </p>
         <p class="sev-breakdown subtle">${breakdownSummary}</p>
@@ -885,7 +888,7 @@ const renderLiveA11yReportHtml = (report) => {
       padding: 0.7rem 0.75rem 0.15rem;
     }
     .summary-group h2 {
-      font-size: 1rem;
+      font-size: 1.25rem;
       margin: 0.15rem 0 0.35rem;
     }
     .summary-group .subtle {
@@ -1013,7 +1016,7 @@ const renderLiveA11yReportHtml = (report) => {
       margin: 2rem 0 0.75rem;
       padding-top: 1.4rem;
       border-top: 3px solid var(--border);
-      font-size: 1rem;
+      font-size: 1.25rem;
       font-weight: 700;
       letter-spacing: 0.01em;
       color: #eaf2ff;
@@ -1092,11 +1095,12 @@ const renderLiveA11yReportHtml = (report) => {
     }
     .sev-subsection-title {
       margin: 0.15rem 0 0.6rem;
-      font-size: 0.95rem;
+      font-size: 1.1rem;
       font-weight: 700;
       color: var(--muted);
       text-transform: uppercase;
       letter-spacing: 0.06em;
+      line-height: 2.5;
     }
     .sev-subsection-incomplete .sev-subsection-title {
       color: #c4b5fd;

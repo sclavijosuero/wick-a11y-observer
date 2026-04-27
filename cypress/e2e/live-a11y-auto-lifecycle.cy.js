@@ -86,7 +86,7 @@ describe('live a11y auto lifecycle', () => {
   //   });
   // });
 
-  it('passes when all impacts are warning-only', () => {
+  it('Test 1: passes when all impacts are warning-only', () => {
     // If you want to set thew analysis configuration specific for one test that is not the default one
     // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
@@ -132,7 +132,7 @@ describe('live a11y auto lifecycle', () => {
 
   });
 
-  it('fails this test when failing impacts are present', () => {
+  it('Test 2: fails this test when failing impacts are present', () => {
     // If you want to set thew analysis configuration specific for one test that is not the default one
     // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
@@ -199,7 +199,7 @@ describe('live a11y auto lifecycle', () => {
 
   });
 
-  it('still runs after the previous test fails', () => {
+  it('Test 3: still runs after the previous test fails', () => {
     // If you want to set thew analysis configuration specific for one test that is not the default one
     // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
@@ -244,7 +244,7 @@ describe('live a11y auto lifecycle', () => {
 
   });
 
-  it('fails this test when all four severities are included as failing impacts', () => {
+  it('Test 4: fails this test when all four severities are included as failing impacts', () => {
     // If you want to set thew analysis configuration specific for one test that is not the default one
     // (rules, includedImpacts, onlyWarnImpacts, runOnly, etc.)
     cy.setLiveA11yAutoSetupOptions({
@@ -282,7 +282,7 @@ describe('live a11y auto lifecycle', () => {
 
   });
 
-  it('one-time checkpoint scan after UI stabilizes', () => {
+  it('Test 5: one-time checkpoint scan after UI stabilizes', () => {
     cy.visit('/live-axe-monitor-playground.html');
     cy.get('[data-cy=monitor-page-title]').should('be.visible');
 
@@ -294,7 +294,7 @@ describe('live a11y auto lifecycle', () => {
     cy.checkAccessibility();
   });
 
-  it('one-time checkpoint scan with custom axe options', () => {
+  it('Test 6: one-time checkpoint scan with custom axe options', () => {
 
     cy.visit('/live-axe-monitor-playground.html');
     cy.get('[data-cy=monitor-page-title]').should('be.visible');
@@ -317,7 +317,7 @@ describe('live a11y auto lifecycle', () => {
     })
   })
 
-  it('two-time checkpoint scan with different custom axe options', () => {
+  it('Test 7: two-time checkpoint scan with different custom axe options', () => {
     // Keep this test focused on explicit checkpoints.
     // Otherwise afterEach emits an additional auto report with only the last state.
     cy.setLiveA11yAutoReportOptions({
@@ -335,6 +335,10 @@ describe('live a11y auto lifecycle', () => {
     cy.get('[data-cy=second-only-issues-panel]').should('be.visible');
     cy.get('[data-cy=reveal-existing-issues]').click();
     cy.get('[data-cy=existing-issues-panel]').should('be.visible');
+
+    // Expose another DOM element before checkpoint A.
+    cy.get('[data-cy=open-drawer]').click();
+    cy.get('[data-cy="drawer"][data-state="open"]').should('be.visible');
 
     // Check point A
     cy.checkAccessibility({
@@ -357,7 +361,8 @@ describe('live a11y auto lifecycle', () => {
     });
 
     // Between the two checkpoints, there could be other cypress commands and actions like get(), click(), etc.
-    // [...code...]
+    cy.get('[data-cy=show-brief]').click();
+    cy.get('[data-cy=brief-alert]').should('be.visible');
 
     // Check point B
     cy.checkAccessibility({
