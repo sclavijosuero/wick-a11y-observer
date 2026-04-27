@@ -3,21 +3,59 @@ import { attachLiveA11yMonitor, createLiveA11yStore, installLiveA11yMonitorOnWin
 const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = 'cypress/accessibility';
 const LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY = '__liveA11yAutoReportOptions';
 const LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY = '__liveA11yAutoSetupOptions';
-const LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY = '__liveA11yAutoActiveStore';
 const LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR = 'LIVE_A11Y_INCLUDE_INCOMPLETE';
 const LIVE_A11Y_GENERATE_REPORTS_ENV_VAR = 'LIVE_A11Y_GENERATE_REPORTS';
 const LIVE_A11Y_RUN_ENV_VAR = 'LIVE_A11Y_RUN';
 let liveA11yAutoActiveStore = null;
+let liveA11yAutoRuntimeSetupOptions = undefined;
+let liveA11yAutoRuntimeReportOptions = undefined;
+let liveA11yRuntimeEnvConfig = {
+  runAccessibility: undefined,
+  generateReports: undefined,
+  includeIncompleteInReport: undefined,
+};
 const testsWithExplicitCheckpointReports = new Set();
 const testsWithFailingViolations = new Map();
 
 const setActiveLiveA11yStore = (store) => {
   liveA11yAutoActiveStore = store || null;
-  Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY, store || undefined);
 };
 
 const getActiveLiveA11yStore = () =>
-  liveA11yAutoActiveStore || Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY) || null;
+  liveA11yAutoActiveStore || null;
+
+const setLiveA11yAutoSetupRuntimeOptions = (options) => {
+  liveA11yAutoRuntimeSetupOptions = options || undefined;
+  Cypress.expose(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY, liveA11yAutoRuntimeSetupOptions);
+};
+
+const getLiveA11yAutoSetupRuntimeOptions = () => liveA11yAutoRuntimeSetupOptions || {};
+
+const clearLiveA11yAutoSetupRuntimeOptions = () => {
+  liveA11yAutoRuntimeSetupOptions = undefined;
+  Cypress.expose(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY, undefined);
+};
+
+const setLiveA11yAutoReportRuntimeOptions = (options) => {
+  liveA11yAutoRuntimeReportOptions = options || undefined;
+  Cypress.expose(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY, liveA11yAutoRuntimeReportOptions);
+};
+
+const getLiveA11yAutoReportRuntimeOptions = () => liveA11yAutoRuntimeReportOptions || {};
+
+const clearLiveA11yAutoReportRuntimeOptions = () => {
+  liveA11yAutoRuntimeReportOptions = undefined;
+  Cypress.expose(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY, undefined);
+};
+
+const setLiveA11yRuntimeEnvConfig = (config = {}) => {
+  liveA11yRuntimeEnvConfig = {
+    runAccessibility: parseOptionalBoolean(config.runAccessibility),
+    generateReports: parseOptionalBoolean(config.generateReports),
+    includeIncompleteInReport: parseOptionalBoolean(config.includeIncompleteInReport),
+  };
+  Cypress.expose('__liveA11yRuntimeEnvConfig', liveA11yRuntimeEnvConfig);
+};
 
 const toPerTestTrackingKey = (testTitle) => `${currentSpecKey()}::${String(testTitle || 'unknown-test')}`;
 
@@ -349,7 +387,7 @@ const resolveIncludeIncompleteInReport = (...optionSources) => {
       if (typeof parsed === 'boolean') return parsed;
     }
   }
-  const parsedFromEnv = parseOptionalBoolean(Cypress.env(LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR));
+  const parsedFromEnv = parseOptionalBoolean(liveA11yRuntimeEnvConfig.includeIncompleteInReport);
   if (typeof parsedFromEnv === 'boolean') return parsedFromEnv;
   return false;
 };
@@ -364,7 +402,7 @@ const resolveGenerateLiveA11yReports = (...optionSources) => {
       if (typeof parsed === 'boolean') return parsed;
     }
   }
-  const parsedFromEnv = parseOptionalBoolean(Cypress.env(LIVE_A11Y_GENERATE_REPORTS_ENV_VAR));
+  const parsedFromEnv = parseOptionalBoolean(liveA11yRuntimeEnvConfig.generateReports);
   if (typeof parsedFromEnv === 'boolean') return parsedFromEnv;
   return true;
 };
@@ -386,10 +424,23 @@ const resolveSkipLiveA11y = (...optionSources) => {
       if (typeof parsed === 'boolean') return parsed;
     }
   }
-  const parsedFromEnv = parseOptionalBoolean(Cypress.env(LIVE_A11Y_RUN_ENV_VAR));
+  const parsedFromEnv = parseOptionalBoolean(liveA11yRuntimeEnvConfig.runAccessibility);
   if (typeof parsedFromEnv === 'boolean') return !parsedFromEnv;
   return true;
 };
+
+const refreshLiveA11yRuntimeEnvConfigFromCyEnv = () =>
+  cy.env([
+    LIVE_A11Y_RUN_ENV_VAR,
+    LIVE_A11Y_GENERATE_REPORTS_ENV_VAR,
+    LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR,
+  ]).then((envValues = {}) => {
+    setLiveA11yRuntimeEnvConfig({
+      runAccessibility: envValues[LIVE_A11Y_RUN_ENV_VAR],
+      generateReports: envValues[LIVE_A11Y_GENERATE_REPORTS_ENV_VAR],
+      includeIncompleteInReport: envValues[LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR],
+    });
+  });
 
 // Tracks previously seen rule+node pairs across tests in the same spec file
 // (key includes normalized page URL so the same target on a different page is not "repeated").
@@ -1428,13 +1479,13 @@ const markTestAsFailedWithoutThrowingHook = (hookThis, message, report) => {
 
 Cypress.Commands.add('setLiveA11yAutoReportOptions', (options = {}) => {
   return cy.then(() => {
-    Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY, options);
+    setLiveA11yAutoReportRuntimeOptions(options);
   });
 });
 
 Cypress.Commands.add('setLiveA11yAutoSetupOptions', (options = {}) => {
   return cy.then(() => {
-    Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY, options);
+    setLiveA11yAutoSetupRuntimeOptions(options);
   });
 });
 
@@ -1523,7 +1574,7 @@ const ensureLiveA11yAutoVisitCommandOverwrite = ({ setupOptions }) => {
   }
 
   Cypress.Commands.overwrite('visit', (originalFn, ...args) => {
-    const runtimeSetupOptions = Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY) || {};
+    const runtimeSetupOptions = getLiveA11yAutoSetupRuntimeOptions();
     const shouldSkipLiveA11y = resolveSkipLiveA11y(runtimeSetupOptions, setupOptions);
     if (shouldSkipLiveA11y) {
       return originalFn(...args);
@@ -1585,7 +1636,7 @@ const ensureLiveA11yAutoNavigationHook = ({ setupOptions, initialScan }) => {
       armAfter: false,
       armOptions: { scanCurrent: false },
     };
-    const runtimeSetupOptions = Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY) || {};
+    const runtimeSetupOptions = getLiveA11yAutoSetupRuntimeOptions();
     const shouldSkipLiveA11y = resolveSkipLiveA11y(runtimeSetupOptions, setupOptions);
     if (shouldSkipLiveA11y) {
       return;
@@ -1663,6 +1714,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     testsWithExplicitCheckpointReports.delete(perTestTrackingKey);
     testsWithFailingViolations.delete(perTestTrackingKey);
     setActiveLiveA11yStore(createLiveA11yStore());
+    refreshLiveA11yRuntimeEnvConfigFromCyEnv();
   });
 
   afterEach(function liveA11yAutoAfterEach() {
@@ -1675,8 +1727,8 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       this.currentTest?.title ||
       'unknown-test';
     const perTestTrackingKey = toPerTestTrackingKey(this.currentTest?.title || testKey);
-    const runtimeSetupOptions = Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY) || {};
-    const runtimeReportOptions = Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY) || {};
+    const runtimeSetupOptions = getLiveA11yAutoSetupRuntimeOptions();
+    const runtimeReportOptions = getLiveA11yAutoReportRuntimeOptions();
     const shouldSkipLiveA11y = resolveSkipLiveA11y(runtimeSetupOptions, setupOptions);
     const shouldGenerateReports = resolveGenerateLiveA11yReports(
       runtimeSetupOptions,
@@ -1690,8 +1742,8 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       runtimeReportOptions,
       reportOptions
     );
-    Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY, undefined);
-    Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY, undefined);
+    clearLiveA11yAutoReportRuntimeOptions();
+    clearLiveA11yAutoSetupRuntimeOptions();
     if (shouldSkipLiveA11y) {
       pendingValidationFailuresByTest.delete(testKey);
       Cypress.log({
