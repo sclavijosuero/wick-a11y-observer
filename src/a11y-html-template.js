@@ -1138,13 +1138,13 @@ const renderLiveA11yReportHtml = (report) => {
     }
     .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
     .node-group { border-left: 3px solid #30363d; }
-    .node-group--recurrence { border-left-color: #a371f7; }
+    .node-group--recurrence { border-left: 4px solid #c9d1d9; }
     .node-group td { background: #161b22; }
     .node-group--recurrence td {
-      background: #181225;
-      color: #d7c7f3;
+      background: #222b36;
+      color: #e6edf3;
     }
-    .node-repeat-pill { margin: 0.4rem 0 0; font-size: 0.76rem; color: #d2a8ff; }
+    .node-repeat-pill { margin: 0.4rem 0 0; font-size: 0.76rem; color: #d0d7de; }
     .node-repeat-pill-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.68rem; }
     .node-repeat-pill code { background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.75rem; color: #e6edf3; }
     .node-recurrence {
@@ -1153,11 +1153,11 @@ const renderLiveA11yReportHtml = (report) => {
       box-sizing: border-box;
       margin: 0 0 0.6rem;
       padding: 0.55rem 0.7rem;
-      background: #211830;
-      border: 1px solid #3d2a54;
+      background: #2a3441;
+      border: 1px solid #7d8590;
       border-radius: 6px;
     }
-    .node-recurrence-title { display: block; font-size: 0.86rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: #e1c2ff; margin-bottom: 0.3rem; }
+    .node-recurrence-title { display: block; font-size: 0.86rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #ffffff; margin-bottom: 0.3rem; }
     .node-recurrence-body { margin: 0; font-size: 0.84rem; color: #c9d1d9; line-height: 1.45; }
     .node-recurrence-rid { font-size: 0.8rem; background: #0d1117; padding: 0.15rem 0.4rem; border-radius: 4px; }
     .node-recurrence-compact { margin-top: 0.3rem; }
@@ -1190,9 +1190,10 @@ const renderLiveA11yReportHtml = (report) => {
       border-color: rgba(86, 211, 100, 0.45);
     }
     .node-priority-repeated {
-      background: #3f245f;
-      color: #f5e9ff;
-      border-color: #8f5ed8;
+      background: #3a4553;
+      color: #ffffff;
+      border-color: #c9d1d9;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
     }
     .node-target-code { display: block; font-size: 0.8rem; word-break: break-all; }
     .node-page { margin: 0.4rem 0 0; font-size: 0.92rem; word-break: break-all; }

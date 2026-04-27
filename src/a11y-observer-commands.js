@@ -982,10 +982,10 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
         outcomeCounts: groupedByDisposition,
         technicalMetrics,
       };
-      cy.log('════════════ 📊 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗦𝗨𝗠𝗠𝗔𝗥𝗬 ════════════');
+      cy.log('════════════ 📊 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗦𝗨𝗠𝗠𝗔𝗥𝗬');
       Cypress.log({
         name: '',
-        message: '════════════ 📝 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 (𝗰𝗼𝗻𝘀𝗼𝗹𝗲 𝗽𝗿𝗼𝗽𝘀) ════════════',
+        message: '════════════ 📝 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 (𝗰𝗼𝗻𝘀𝗼𝗹𝗲 𝗽𝗿𝗼𝗽𝘀)',
 
         consoleProps: () => summaryForConsole,
       });
