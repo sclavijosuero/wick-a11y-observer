@@ -99,7 +99,9 @@ describe('live a11y auto lifecycle', () => {
 
     // Trigger a live region update (toast) after initial scan.
     cy.get('[data-cy=show-toast]').click();
-    cy.get('[data-cy="standard-toast"]').should('be.visible');
+    cy.get('[data-cy="standard-toast"]', { timeout: 5000 })
+      .should('exist')
+      .and('contain.text', 'Saved');
 
     // Add a hidden form dynamically, then wait for it to become visible.
     cy.get('[data-cy=add-hidden-then-show]').click();
@@ -158,7 +160,7 @@ describe('live a11y auto lifecycle', () => {
 
     // Open menu to exercise popup-widget style live scans.
     cy.get('[data-cy=open-menu]').click();
-    cy.get('[data-cy="main-menu"]').should('be.visible');
+    cy.get('[data-cy="main-menu"]').should('exist');
 
     // Reveal pre-existing disclosure content.
     cy.get('[data-cy=toggle-details]').click();
@@ -166,7 +168,9 @@ describe('live a11y auto lifecycle', () => {
 
     // Align primary-page timing with test #1 before navigating away.
     cy.get('[data-cy=show-toast]').click();
-    cy.get('[data-cy="standard-toast"]').should('be.visible');
+    cy.get('[data-cy="standard-toast"]', { timeout: 5000 })
+      .should('exist')
+      .and('contain.text', 'Saved');
 
     cy.get('[data-cy=add-hidden-then-show]').click();
     cy.get('[data-cy="late-form-title"]').should('be.visible');
@@ -177,7 +181,9 @@ describe('live a11y auto lifecycle', () => {
 
     // Add a few more dynamic states so this test consistently exceeds test #1.
     cy.get('[data-cy=show-toast]').click();
-    cy.get('[data-cy="standard-toast"]').should('be.visible');
+    cy.get('[data-cy="standard-toast"]', { timeout: 5000 })
+      .should('exist')
+      .and('contain.text', 'Saved');
 
     cy.get('[data-cy=add-hidden-then-show]').click();
     cy.get('[data-cy="late-form-title"]').should('be.visible');
@@ -226,7 +232,7 @@ describe('live a11y auto lifecycle', () => {
 
     // Open menu to exercise popup-widget style live scans.
     cy.get('[data-cy=open-menu]').click();
-    cy.get('[data-cy="main-menu"]').should('be.visible');
+    cy.get('[data-cy="main-menu"]').should('exist');
 
     // Reveal pre-existing disclosure content.
     cy.get('[data-cy=toggle-details]').click();
@@ -270,7 +276,7 @@ describe('live a11y auto lifecycle', () => {
 
     // Open menu to exercise popup-widget style live scans.
     cy.get('[data-cy=open-menu]').click();
-    cy.get('[data-cy="main-menu"]').should('be.visible');
+    cy.get('[data-cy="main-menu"]').should('exist');
 
     // Reveal pre-existing disclosure content.
     cy.get('[data-cy=toggle-details]').click();

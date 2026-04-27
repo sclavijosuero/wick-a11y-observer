@@ -7,6 +7,15 @@ const LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY = '__liveA11yAutoActiveStore';
 const LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR = 'LIVE_A11Y_INCLUDE_INCOMPLETE';
 const LIVE_A11Y_GENERATE_REPORTS_ENV_VAR = 'LIVE_A11Y_GENERATE_REPORTS';
 const LIVE_A11Y_RUN_ENV_VAR = 'LIVE_A11Y_RUN';
+let liveA11yAutoActiveStore = null;
+
+const setActiveLiveA11yStore = (store) => {
+  liveA11yAutoActiveStore = store || null;
+  Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY, store || undefined);
+};
+
+const getActiveLiveA11yStore = () =>
+  liveA11yAutoActiveStore || Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY) || null;
 
 /**
  * @param {string} p
@@ -1193,7 +1202,13 @@ Cypress.Commands.add('stopLiveA11yMonitor', () => {
 });
 
 Cypress.Commands.add('getLiveA11yResults', () => {
-  return cy.window({ log: false }).then((win) => win.__liveA11yMonitor?.store ?? null);
+  return cy.window({ log: false }).then((win) => {
+    const monitorStore = win.__liveA11yMonitor?.store;
+    if (monitorStore) {
+      return monitorStore;
+    }
+    return getActiveLiveA11yStore();
+  });
 });
 
 Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
@@ -1468,6 +1483,50 @@ const ensureLiveA11yAutoVisitCommandOverwrite = ({ setupOptions }) => {
     if (shouldSkipLiveA11y) {
       return originalFn(...args);
     }
+    const store = getActiveLiveA11yStore();
+    if (!store) {
+      return originalFn(...args);
+    }
+    const setupWithAutoPreNavFlush = mergeLiveA11ySetupOptions(
+      AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP,
+      setupOptions
+    );
+    const mergedSetupOptions = mergeLiveA11ySetupOptions(
+      setupWithAutoPreNavFlush,
+      runtimeSetupOptions
+    );
+    const resolvedSetupOptions = resolveLiveA11yMonitorInstallOptions(mergedSetupOptions);
+
+    const wrapOnBeforeLoad = (existingOnBeforeLoad) => (win) => {
+      installLiveA11yMonitorOnWindow(win, store, resolvedSetupOptions);
+      if (typeof existingOnBeforeLoad === 'function') {
+        existingOnBeforeLoad(win);
+      }
+    };
+
+    if (args.length === 1 && args[0] && typeof args[0] === 'object' && !Array.isArray(args[0])) {
+      const onlyOptionsArg = args[0];
+      return originalFn({
+        ...onlyOptionsArg,
+        onBeforeLoad: wrapOnBeforeLoad(onlyOptionsArg.onBeforeLoad),
+      });
+    }
+
+    if (args.length >= 2 && args[1] && typeof args[1] === 'object' && !Array.isArray(args[1])) {
+      const [url, options, ...rest] = args;
+      return originalFn(url, {
+        ...options,
+        onBeforeLoad: wrapOnBeforeLoad(options.onBeforeLoad),
+      }, ...rest);
+    }
+
+    if (args.length >= 1) {
+      const [url, ...rest] = args;
+      return originalFn(url, {
+        onBeforeLoad: wrapOnBeforeLoad(undefined),
+      }, ...rest);
+    }
+
     return originalFn(...args);
   });
 
@@ -1480,7 +1539,7 @@ const ensureLiveA11yAutoNavigationHook = ({ setupOptions, initialScan }) => {
   }
 
   Cypress.on('window:before:load', (win) => {
-    const store = Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY);
+    const store = getActiveLiveA11yStore();
     if (!store) {
       return;
     }
@@ -1563,7 +1622,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
   ensureLiveA11yAutoNavigationHook({ setupOptions, initialScan });
 
   beforeEach(() => {
-    Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY, createLiveA11yStore());
+    setActiveLiveA11yStore(createLiveA11yStore());
   });
 
   afterEach(function liveA11yAutoAfterEach() {
@@ -1607,7 +1666,9 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       if (stopMonitorAfterEach) {
         cy.stopLiveA11yMonitor();
       }
-      Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY, undefined);
+      cy.then(() => {
+        setActiveLiveA11yStore(null);
+      });
       return;
     }
 
@@ -1689,7 +1750,9 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     if (stopMonitorAfterEach) {
       cy.stopLiveA11yMonitor();
     }
-    Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY, undefined);
+    cy.then(() => {
+      setActiveLiveA11yStore(null);
+    });
   });
 
   after(() => {

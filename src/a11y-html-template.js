@@ -92,6 +92,21 @@ const severitySectionPolicyOutcomeLabel = (disposition) =>
     ? "Checked as warnings - DOES NOT FAIL TEST"
     : "Checked as violations - FAILS TEST";
 
+const isSeverityWarningOnlyByPolicy = (severity, impactPolicy = {}) => {
+  const normalizedSeverity = String(severity || "").toLowerCase();
+  const included = new Set(
+    Array.isArray(impactPolicy?.included)
+      ? impactPolicy.included.map((level) => String(level).toLowerCase())
+      : []
+  );
+  const warn = new Set(
+    Array.isArray(impactPolicy?.warn)
+      ? impactPolicy.warn.map((level) => String(level).toLowerCase())
+      : []
+  );
+  return warn.has(normalizedSeverity) && !included.has(normalizedSeverity);
+};
+
 const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}, impactPolicy = {}) => {
   const entry = groupedBySeverityDisposition?.[severity];
   if (entry?.sectionType === "incomplete") return "INCOMPLETE";
@@ -419,6 +434,8 @@ const renderLiveA11yReportHtml = (report) => {
   const artifact = report.reportArtifact || {};
   const includeIncompleteInReport = report?.reportOptions?.includeIncompleteInReport === true;
   const bySevDisposition = counts.groupedBySeverityDisposition || {};
+  const bySevIssues = counts.groupedBySeverityIssues || {};
+  const bySevIncomplete = counts.groupedBySeverityIncomplete || {};
   const sevOrder = report.severityOrder || ["critical", "serious", "moderate", "minor"];
   const violations = report.groupedViolations || [];
   const monitorMeta = report.meta || {};
@@ -656,9 +673,14 @@ const renderLiveA11yReportHtml = (report) => {
       const sevEntry = bySevDisposition?.[s] || {};
       const failCount = Number(sevEntry.fail || 0);
       const warnCount = Number(sevEntry.warn || 0);
-      const incompleteCount = Number(sevEntry.incomplete || 0);
-      const issuesCount = failCount + warnCount;
-      const sectionType = severitySectionTypeLabel(s, bySevDisposition, report.impactPolicy || {});
+      const issuesCount = failCount + warnCount || Number(bySevIssues?.[s] || 0);
+      const incompleteCount = Number(sevEntry.incomplete || 0) || Number(bySevIncomplete?.[s] || 0);
+      const warningOnlyByPolicy = isSeverityWarningOnlyByPolicy(s, report.impactPolicy || {});
+      const sectionType = issuesCount > 0
+        ? (failCount > 0 ? "VIOLATIONS" : warningOnlyByPolicy ? "WARNINGS" : "VIOLATIONS")
+        : incompleteCount > 0
+          ? "INCOMPLETE"
+          : severitySectionTypeLabel(s, bySevDisposition, report.impactPolicy || {});
       const breakdownLabel = includeIncompleteInReport
         ? `ISSUES ${issuesCount} | INCOMPLETE ${incompleteCount}`
         : `ISSUES ${issuesCount}`;
@@ -698,7 +720,7 @@ const renderLiveA11yReportHtml = (report) => {
       const sectionCounts = bySevDisposition?.[sev] || {};
       const failCount = Number(sectionCounts.fail || 0);
       const warnCount = Number(sectionCounts.warn || 0);
-      const incompleteCount = Number(sectionCounts.incomplete || 0);
+      const incompleteCount = Number(sectionCounts.incomplete || 0) || Number(bySevIncomplete?.[sev] || 0);
       const normalizedSeverity = String(sev || "").toLowerCase();
       const included = new Set(
         Array.isArray(report?.impactPolicy?.included)
@@ -712,7 +734,7 @@ const renderLiveA11yReportHtml = (report) => {
       );
       const checkedAsWarnings = warn.has(normalizedSeverity) && !included.has(normalizedSeverity);
       const sectionDisposition = checkedAsWarnings ? "warn" : "fail";
-      const issueCount = failCount + warnCount;
+      const issueCount = failCount + warnCount || Number(bySevIssues?.[sev] || 0);
       const issueBucketTitle = checkedAsWarnings
         ? "Warning issues (does not fail test)"
         : "Violation issues (fails test)";
@@ -1233,15 +1255,15 @@ const renderLiveA11yReportHtml = (report) => {
     }
     .node-group--recurrence td,
     .node-group--recurrence th.col-target {
-      padding: 0.36rem 0.34rem;
+      padding: 0.28rem 0.3rem;
     }
     .node-group--recurrence .node-target-label {
-      font-size: 0.78rem;
-      margin-bottom: 0.2rem;
+      font-size: 0.76rem;
+      margin-bottom: 0.12rem;
     }
     .node-group--recurrence .node-target-code {
-      font-size: 0.75rem;
-      line-height: 1.35;
+      font-size: 0.74rem;
+      line-height: 1.3;
     }
     .node-group--recurrence .node-page {
       margin-top: 0.25rem;
@@ -1302,9 +1324,9 @@ const renderLiveA11yReportHtml = (report) => {
       font-size: 0.62rem;
     }
     .node-group--recurrence .node-fix-html-column {
-      margin-top: 0.35rem;
-      padding-top: 0.2rem;
-      padding-left: 0.8rem;
+      margin-top: 0.2rem;
+      padding-top: 0.08rem;
+      padding-left: 0.7rem;
     }
     .node-group--recurrence .node-section-eyebrow {
       font-size: 0.74rem;
