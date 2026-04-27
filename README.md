@@ -9,7 +9,7 @@
 - Tracks dynamic UI changes after the initial scan and continues analyzing as the page updates.
 - Supports both live monitoring and explicit checkpoint scanning (`cy.checkAccessibility(...)`) in the same API.
 - Supports multiple checkpoints in one test, with optional custom checkpoint labels when provided.
-- Detects repeated accessibility findings on the same DOM nodes across tests in the same spec file and highlights first-seen context in reports.
+- **Detects repeated accessibility findings on the same DOM nodes across tests in the same spec file and highlights first-seen context in reports.**
 - **Optional inclusion of axe `incomplete` findings in reporting.**
 - Accessibility analysis summaries are also surfaced in the Cypress command log for fast, in-run feedback.
 - Selecting a reported finding in the Cypress command log highlights the related element(s) in the Cypress runner for faster visual debugging.
@@ -27,27 +27,24 @@ Load the plugin commands in your Cypress support file:
 import "wick-a11y-observer";
 ```
 
-If you are developing inside this repository (local source import), use:
-
-```js
-import "../../src/a11y-observer-commands.js";
-```
-
-Import automatically registers auto lifecycle hooks (no extra call required).
+**This import automatically registers auto lifecycle hooks (no extra call required).**
 
 Register the Node-side reporter task in `cypress.config.js`:
 
 ```js
+const { defineConfig } = require("cypress");
 const { registerLiveA11yReporterTasks } = require("./src/a11y-reporter");
 
-module.exports = {
+module.exports = defineConfig({
+  // Override output folder for generated .json/.html accessibility reports
+  accessibilityFolder: "cypress/a11y",
   e2e: {
     setupNodeEvents(on, config) {
-      registerLiveA11yReporterTasks(on);
+      registerLiveA11yReporterTasks(on, config);
       return config;
     },
   },
-};
+});
 ```
 
 ---
@@ -438,6 +435,9 @@ Analysis options in the HTML report now include a `Scan mode` row so you can qui
 
 All generated reports are saved under `cypress/accessibility/` by default and are written as:
 
+- You can override the default folder with `accessibilityFolder` in `cypress.config.js` (for example `accessibilityFolder: "cypress/my-a11y-artifacts"`).
+- If `accessibilityFolder` is omitted or empty, the default `cypress/accessibility/` folder is used.
+
 - one `.json` file (raw/report data), and
 - one `.html` file (human-readable report UI),
 - both sharing the same base name.
@@ -503,4 +503,10 @@ This output includes:
 
 This lets CI users see key accessibility results directly in terminal output without opening report files.
 The same computed validation status (`PASS` / `FAIL`) is also persisted into the JSON payload and displayed in the HTML report summary.
+
+## Change Log
+
+### `1.0.0-beta.0`
+
+- First public beta release: continuous live + checkpoint accessibility scanning for Cypress, including violations, warnings and optional `incomplete` findings, with strict end-of-run validation, rich JSON/HTML reports, and CI-friendly terminal summaries.
 

@@ -1,6 +1,6 @@
 {
   "name": "wick-a11y-observer",
-  "version": "1.0.0-alpha.0",
+  "version": "1.0.0-beta.0",
   "description": "Cypress plugin: observe DOM changes, scan for a11y issues, and report them during tests.",
   "main": "src/a11y-observer-commands.js",
   "types": "src/a11y-observer-commands.d.ts",

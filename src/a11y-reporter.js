@@ -16,7 +16,6 @@ const TEST_SELECTOR_ATTRIBUTES = [
 ];
 const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = "cypress/accessibility";
 const DEFAULT_ACCESSIBILITY_REPORT_FILE_NAME = "accessibility-results.json";
-const DEFAULT_ACCESSIBILITY_REPORT_PATH = `${DEFAULT_ACCESSIBILITY_RESULTS_FOLDER}/${DEFAULT_ACCESSIBILITY_REPORT_FILE_NAME}`;
 const IMPACT_LEVEL_SET = new Set(SEVERITY_ORDER);
 const ISSUE_TECHNICAL_METRIC_ORDER = [
   "initialViolationsRaw",
@@ -216,6 +215,17 @@ const stripIncompleteFindingsFromRawResults = (results) => {
     });
   }
   return nextResults;
+};
+
+const normalizeAccessibilityResultsFolder = (value) => {
+  if (typeof value !== "string") return "";
+  return value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+};
+
+const resolveDefaultAccessibilityReportPath = (accessibilityFolder) => {
+  const normalizedFolder = normalizeAccessibilityResultsFolder(accessibilityFolder);
+  const resolvedFolder = normalizedFolder || DEFAULT_ACCESSIBILITY_RESULTS_FOLDER;
+  return `${resolvedFolder}/${DEFAULT_ACCESSIBILITY_REPORT_FILE_NAME}`;
 };
 
 const severityRank = (impact) => {
@@ -1173,11 +1183,12 @@ const logLiveA11yReportToTerminal = (payload, validationResult, { savedTo, saved
   console.log(terminalSeparator);
 };
 
-const registerLiveA11yReporterTasks = (on) => {
+const registerLiveA11yReporterTasks = (on, config = {}) => {
+  const defaultOutputPath = resolveDefaultAccessibilityReportPath(config?.accessibilityFolder);
   on("task", {
     "liveA11y:buildReport"({
       results,
-      outputPath = DEFAULT_ACCESSIBILITY_REPORT_PATH,
+      outputPath = defaultOutputPath,
       validation = {},
       reportMeta = undefined,
       repeatInfo = undefined,

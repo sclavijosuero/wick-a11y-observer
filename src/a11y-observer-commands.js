@@ -47,6 +47,18 @@ const normalizeScanType = (value) => {
   return normalized === 'checkpoint' ? 'checkpoint' : 'live';
 };
 
+const normalizeAccessibilityResultsFolder = (value) => {
+  if (typeof value !== 'string') return '';
+  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+  return normalized;
+};
+
+const resolveAccessibilityResultsFolder = () => {
+  const fromConfig = normalizeAccessibilityResultsFolder(Cypress.config('accessibilityFolder'));
+  if (fromConfig) return fromConfig;
+  return DEFAULT_ACCESSIBILITY_RESULTS_FOLDER;
+};
+
 const buildDefaultLiveA11yReportFileName = (sortableLocal, testNumberPadded) =>
   `a11y-live-auto--${sortableLocal}--T${testNumberPadded}.json`;
 
@@ -108,7 +120,8 @@ const buildLiveA11yOutputPathAndMeta = (outputPathOverride, namingOptions = {}) 
       sortableLocal,
       testNumberInSpecPadded
     );
-  const defaultPath = `${DEFAULT_ACCESSIBILITY_RESULTS_FOLDER}/${defaultReportFileName}`;
+  const accessibilityResultsFolder = resolveAccessibilityResultsFolder();
+  const defaultPath = `${accessibilityResultsFolder}/${defaultReportFileName}`;
   const reportId = isCheckpointScanReport
     ? (sanitizedCheckpointLabel
       ? `a11y-checkpoint--${sortableLocal}--T${testNumberInSpecPadded}-checkpoint-${sanitizedCheckpointLabel}`
