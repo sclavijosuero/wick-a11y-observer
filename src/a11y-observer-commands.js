@@ -1418,6 +1418,14 @@ const mergeLiveA11ySetupOptions = (base = {}, override = {}) => ({
   },
 });
 
+const resolveAutoLifecycleSetupOptions = (setupOptions = {}, runtimeSetupOptions = {}) =>
+  resolveLiveA11yMonitorInstallOptions(
+    mergeLiveA11ySetupOptions(
+      mergeLiveA11ySetupOptions(AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP, setupOptions),
+      runtimeSetupOptions
+    )
+  );
+
 const logLiveA11yValidationMarker = ({
   testKey,
   reportPath,
@@ -1487,15 +1495,7 @@ const ensureLiveA11yAutoVisitCommandOverwrite = ({ setupOptions }) => {
     if (!store) {
       return originalFn(...args);
     }
-    const setupWithAutoPreNavFlush = mergeLiveA11ySetupOptions(
-      AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP,
-      setupOptions
-    );
-    const mergedSetupOptions = mergeLiveA11ySetupOptions(
-      setupWithAutoPreNavFlush,
-      runtimeSetupOptions
-    );
-    const resolvedSetupOptions = resolveLiveA11yMonitorInstallOptions(mergedSetupOptions);
+    const resolvedSetupOptions = resolveAutoLifecycleSetupOptions(setupOptions, runtimeSetupOptions);
 
     const wrapOnBeforeLoad = (existingOnBeforeLoad) => (win) => {
       installLiveA11yMonitorOnWindow(win, store, resolvedSetupOptions);
@@ -1553,15 +1553,7 @@ const ensureLiveA11yAutoNavigationHook = ({ setupOptions, initialScan }) => {
     if (shouldSkipLiveA11y) {
       return;
     }
-    const setupWithAutoPreNavFlush = mergeLiveA11ySetupOptions(
-      AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP,
-      setupOptions
-    );
-    const mergedSetupOptions = mergeLiveA11ySetupOptions(
-      setupWithAutoPreNavFlush,
-      runtimeSetupOptions
-    );
-    const resolvedSetupOptions = resolveLiveA11yMonitorInstallOptions(mergedSetupOptions);
+    const resolvedSetupOptions = resolveAutoLifecycleSetupOptions(setupOptions, runtimeSetupOptions);
     installLiveA11yMonitorOnWindow(win, store, resolvedSetupOptions);
 
     win.addEventListener('load', () => {
