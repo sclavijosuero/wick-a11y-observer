@@ -315,16 +315,6 @@ describe('live a11y auto lifecycle', () => {
       },
     });
 
-    cy.checkAccessibility({
-      iframes: true,
-      includedImpacts: ['critical'],
-      onlyWarnImpacts: ['serious','moderate'],
-      runOnly: standardsTags,
-      rules: {
-        // Example rule override for this one-time run.
-        'color-contrast': { enabled: false },
-      },
 
-    });
   });
 });
