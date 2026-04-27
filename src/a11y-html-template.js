@@ -251,6 +251,11 @@ const renderNodeRows = (nodeDetails, ruleId) => {
           )}" rel="noreferrer" target="_blank">${escapeHtml(node.pageUrl)}</a></p>`
           : "";
         const rowRecurrence = Boolean(node.repeatedFromEarlierReport);
+        const firstReportIdLine = rowRecurrence
+          ? `<p class="node-recurrence-body">First identified in report: <code class="node-recurrence-rid">${escapeHtml(
+            node.firstReportId || "unknown-report"
+          )}</code></p>`
+          : "";
         const recurrenceBanner = rowRecurrence
           ? `<aside class="node-recurrence" role="note" aria-label="Cross-test recurrence">
   <span class="node-recurrence-title">Same finding in an earlier report (this spec) — lower triage priority</span>
@@ -261,6 +266,7 @@ const renderNodeRows = (nodeDetails, ruleId) => {
           ? `<details class="node-recurrence-compact">
   <summary class="node-recurrence-compact-summary">Show recurring finding details</summary>
   <div class="node-recurrence-compact-body">
+    ${firstReportIdLine}
     <div class="node-section node-section-counts node-detail-block">
       <div class="node-section-eyebrow">Scans</div>
       ${renderNodeSourceAndCounts(node)}
@@ -616,8 +622,9 @@ const renderLiveA11yReportHtml = (report) => {
       const pads = padCount > 0 ? "<td class=\"tech-cell tech-cell-empty\"></td>".repeat(padCount) : "";
       return `<tr>${cells}${pads}</tr>`;
     });
-  const technicalRowsPreview = technicalRowHtml.slice(0, 1).join("");
-  const technicalRowsExpandedRemainder = technicalRowHtml.slice(1).join("");
+  const technicalPreviewRowCount = 2;
+  const technicalRowsPreview = technicalRowHtml.slice(0, technicalPreviewRowCount).join("");
+  const technicalRowsExpandedRemainder = technicalRowHtml.slice(technicalPreviewRowCount).join("");
   const technicalTotalRows = technicalRowHtml.length;
 
   const sevPills = severityTotalsOrder
@@ -1144,6 +1151,23 @@ const renderLiveA11yReportHtml = (report) => {
       background: #222b36;
       color: #e6edf3;
     }
+    .node-group--recurrence td,
+    .node-group--recurrence th.col-target {
+      padding: 0.36rem 0.34rem;
+    }
+    .node-group--recurrence .node-target-label {
+      font-size: 0.78rem;
+      margin-bottom: 0.2rem;
+    }
+    .node-group--recurrence .node-target-code {
+      font-size: 0.75rem;
+      line-height: 1.35;
+    }
+    .node-group--recurrence .node-page {
+      margin-top: 0.25rem;
+      font-size: 0.84rem;
+      line-height: 1.35;
+    }
     .node-repeat-pill { margin: 0.4rem 0 0; font-size: 0.76rem; color: #d0d7de; }
     .node-repeat-pill-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.68rem; }
     .node-repeat-pill code { background: #21262d; padding: 0.1rem 0.35rem; border-radius: 4px; font-size: 0.75rem; color: #e6edf3; }
@@ -1151,14 +1175,14 @@ const renderLiveA11yReportHtml = (report) => {
       width: 100%;
       max-width: 100%;
       box-sizing: border-box;
-      margin: 0 0 0.6rem;
-      padding: 0.55rem 0.7rem;
+      margin: 0 0 0.4rem;
+      padding: 0.38rem 0.52rem;
       background: #2a3441;
       border: 1px solid #7d8590;
       border-radius: 6px;
     }
-    .node-recurrence-title { display: block; font-size: 0.86rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #ffffff; margin-bottom: 0.3rem; }
-    .node-recurrence-body { margin: 0; font-size: 0.84rem; color: #c9d1d9; line-height: 1.45; }
+    .node-recurrence-title { display: block; font-size: 0.78rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em; color: #ffffff; margin-bottom: 0.2rem; }
+    .node-recurrence-body { margin: 0; font-size: 0.84rem; color: #c9d1d9; line-height: 1.4; }
     .node-recurrence-rid { font-size: 0.8rem; background: #0d1117; padding: 0.15rem 0.4rem; border-radius: 4px; }
     .node-recurrence-compact { margin-top: 0.3rem; }
     .node-recurrence-compact-summary {
@@ -1194,6 +1218,17 @@ const renderLiveA11yReportHtml = (report) => {
       color: #ffffff;
       border-color: #c9d1d9;
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+      padding: 0.06rem 0.4rem;
+      font-size: 0.62rem;
+    }
+    .node-group--recurrence .node-fix-html-column {
+      margin-top: 0.35rem;
+      padding-top: 0.2rem;
+      padding-left: 0.8rem;
+    }
+    .node-group--recurrence .node-section-eyebrow {
+      font-size: 0.74rem;
+      margin-bottom: 0.22rem;
     }
     .node-target-code { display: block; font-size: 0.8rem; word-break: break-all; }
     .node-page { margin: 0.4rem 0 0; font-size: 0.92rem; word-break: break-all; }
@@ -1281,7 +1316,7 @@ const renderLiveA11yReportHtml = (report) => {
         <details class="tech-expand">
           <summary>
             Show more technical metrics
-            <span class="tech-expand-hint">(${Math.max(technicalTotalRows - 1, 0)} more row(s) available)</span>
+            <span class="tech-expand-hint">(${Math.max(technicalTotalRows - technicalPreviewRowCount, 0)} more row(s) available)</span>
           </summary>
           <table class="tech-grid tech-grid-expanded" role="table" aria-label="Technical metrics additional rows">
             <tbody>${technicalRowsExpandedRemainder || '<tr><td class="tech-cell tech-cell-empty" colspan="3">No additional rows.</td></tr>'}</tbody>

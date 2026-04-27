@@ -18,23 +18,30 @@ const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = "cypress/accessibility";
 const DEFAULT_ACCESSIBILITY_REPORT_FILE_NAME = "accessibility-results.json";
 const DEFAULT_ACCESSIBILITY_REPORT_PATH = `${DEFAULT_ACCESSIBILITY_RESULTS_FOLDER}/${DEFAULT_ACCESSIBILITY_REPORT_FILE_NAME}`;
 const IMPACT_LEVEL_SET = new Set(SEVERITY_ORDER);
-const TECHNICAL_METRIC_ORDER = [
+const ISSUE_TECHNICAL_METRIC_ORDER = [
   "initialViolationsRaw",
   "liveDistinctViolationInstancesExcludingInitial",
   "totalViolationsInitialPlusLiveDistinct",
-  "initialIncompleteRaw",
-  "liveDistinctIncompleteInstancesExcludingInitial",
-  "totalIncompleteInitialPlusLiveDistinct",
   "initialDistinctNodesWithIssues",
   "liveDistinctNodesWithIssuesExcludingInitial",
   "totalNodesInitialPlusLiveDistinct",
+];
+const INCOMPLETE_TECHNICAL_METRIC_ORDER = [
+  "initialIncompleteRaw",
+  "liveDistinctIncompleteInstancesExcludingInitial",
+  "totalIncompleteInitialPlusLiveDistinct",
   "initialDistinctNodesWithIncomplete",
   "liveDistinctNodesWithIncompleteExcludingInitial",
   "totalNodesIncompleteInitialPlusLiveDistinct",
+];
+const RUNTIME_TECHNICAL_METRIC_ORDER = [
   "liveScansCaptured",
   "monitorDroppedScans",
   "monitorErrors",
+];
+const DUPLICATE_TECHNICAL_METRIC_ORDER = [
   "duplicatedViolationsFromEarlierReports",
+  "duplicatedIncompleteFindingsFromEarlierReports",
   "duplicatedNodesFromEarlierReports",
   "previousReportsInSpec",
 ];
@@ -130,23 +137,47 @@ const TECHNICAL_METRIC_HELP = {
     related: ["liveScansCaptured", "monitorDroppedScans"],
   },
   duplicatedViolationsFromEarlierReports: {
-    label: "Duplicated grouped violations from earlier reports",
+    label: "Duplicated grouped issue findings from earlier reports",
     description:
-      "How many grouped violations (rule + page) in this report were already detected in earlier reports in the same spec file.",
-    related: ["duplicatedNodesFromEarlierReports", "previousReportsInSpec"],
+      "How many grouped issue findings (fail/warn, rule + page) in this report were already detected in earlier reports in the same spec file.",
+    related: ["duplicatedIncompleteFindingsFromEarlierReports", "duplicatedNodesFromEarlierReports", "previousReportsInSpec"],
+  },
+  duplicatedIncompleteFindingsFromEarlierReports: {
+    label: "Duplicated grouped incomplete findings from earlier reports",
+    description:
+      "How many grouped incomplete findings (manual-review, rule + page) in this report were already detected in earlier reports in the same spec file.",
+    related: ["duplicatedViolationsFromEarlierReports", "duplicatedNodesFromEarlierReports", "previousReportsInSpec"],
   },
   duplicatedNodesFromEarlierReports: {
     label: "Duplicated nodes from earlier reports",
     description:
       "How many node+page targets in this report were already seen in earlier reports in the same spec file.",
-    related: ["duplicatedViolationsFromEarlierReports", "previousReportsInSpec"],
+    related: ["duplicatedViolationsFromEarlierReports", "duplicatedIncompleteFindingsFromEarlierReports", "previousReportsInSpec"],
   },
   previousReportsInSpec: {
     label: "Previous reports in this spec",
     description:
       "How many reports were already emitted in this spec before this one. First report is 0.",
-    related: ["duplicatedViolationsFromEarlierReports", "duplicatedNodesFromEarlierReports"],
+    related: ["duplicatedViolationsFromEarlierReports", "duplicatedIncompleteFindingsFromEarlierReports", "duplicatedNodesFromEarlierReports"],
   },
+};
+
+const buildTechnicalMetricOrder = (technicalMetrics = {}) => {
+  const hasIncompleteMetrics = INCOMPLETE_TECHNICAL_METRIC_ORDER.some(
+    (key) => Number(technicalMetrics[key] || 0) > 0
+  );
+  const hasIncompleteDuplicates = Number(
+    technicalMetrics.duplicatedIncompleteFindingsFromEarlierReports || 0
+  ) > 0;
+  return [
+    ...ISSUE_TECHNICAL_METRIC_ORDER,
+    ...(hasIncompleteMetrics ? INCOMPLETE_TECHNICAL_METRIC_ORDER : []),
+    ...RUNTIME_TECHNICAL_METRIC_ORDER,
+    "duplicatedViolationsFromEarlierReports",
+    ...(hasIncompleteDuplicates ? ["duplicatedIncompleteFindingsFromEarlierReports"] : []),
+    "duplicatedNodesFromEarlierReports",
+    "previousReportsInSpec",
+  ];
 };
 
 const severityRank = (impact) => {
@@ -885,7 +916,8 @@ const attachReportArtifact = (outputPath, absolutePath, reportMeta) => {
 };
 
 const buildCrossReportDuplicateStats = (groupedViolations = []) => {
-  const duplicateGroupedViolationKeys = new Set();
+  const duplicateGroupedIssueKeys = new Set();
+  const duplicateGroupedIncompleteKeys = new Set();
   const duplicateNodeKeys = new Set();
 
   (Array.isArray(groupedViolations) ? groupedViolations : []).forEach((violation) => {
@@ -898,12 +930,18 @@ const buildCrossReportDuplicateStats = (groupedViolations = []) => {
       const target = node?.rawTarget || node?.target;
       const nodeKey = buildNodeIdentityKey(target, node?.pageUrl);
       duplicateNodeKeys.add(nodeKey);
-      duplicateGroupedViolationKeys.add(buildRulePageKey(ruleId, node?.pageUrl, findingType));
+      const groupedKey = buildRulePageKey(ruleId, node?.pageUrl, findingType);
+      if (findingType === "incomplete") {
+        duplicateGroupedIncompleteKeys.add(groupedKey);
+      } else {
+        duplicateGroupedIssueKeys.add(groupedKey);
+      }
     });
   });
 
   return {
-    duplicatedViolationsFromEarlierReports: duplicateGroupedViolationKeys.size,
+    duplicatedViolationsFromEarlierReports: duplicateGroupedIssueKeys.size,
+    duplicatedIncompleteFindingsFromEarlierReports: duplicateGroupedIncompleteKeys.size,
     duplicatedNodesFromEarlierReports: duplicateNodeKeys.size,
   };
 };
@@ -955,6 +993,9 @@ const buildReportSummary = (payload = {}) => {
     duplicatedViolationsFromEarlierReports: Number(
       duplicateStats.duplicatedViolationsFromEarlierReports || 0
     ),
+    duplicatedIncompleteFindingsFromEarlierReports: Number(
+      duplicateStats.duplicatedIncompleteFindingsFromEarlierReports || 0
+    ),
     duplicatedNodesFromEarlierReports: Number(
       duplicateStats.duplicatedNodesFromEarlierReports || 0
     ),
@@ -970,7 +1011,7 @@ const buildReportSummary = (payload = {}) => {
       generatedLocal,
       reportFileJson: artifact.fileName || "—",
     },
-    technicalOrder: TECHNICAL_METRIC_ORDER,
+    technicalOrder: buildTechnicalMetricOrder(technicalMetrics),
     technicalMetrics,
     metricHelp: TECHNICAL_METRIC_HELP,
   };
