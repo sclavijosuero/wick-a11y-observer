@@ -8,6 +8,8 @@ const LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR = 'LIVE_A11Y_INCLUDE_INCOMPLETE';
 const LIVE_A11Y_GENERATE_REPORTS_ENV_VAR = 'LIVE_A11Y_GENERATE_REPORTS';
 const LIVE_A11Y_RUN_ENV_VAR = 'LIVE_A11Y_RUN';
 let liveA11yAutoActiveStore = null;
+const testsWithExplicitCheckpointReports = new Set();
+const testsWithFailingViolations = new Map();
 
 const setActiveLiveA11yStore = (store) => {
   liveA11yAutoActiveStore = store || null;
@@ -16,6 +18,8 @@ const setActiveLiveA11yStore = (store) => {
 
 const getActiveLiveA11yStore = () =>
   liveA11yAutoActiveStore || Cypress.env(LIVE_A11Y_AUTO_ACTIVE_STORE_ENV_KEY) || null;
+
+const toPerTestTrackingKey = (testTitle) => `${currentSpecKey()}::${String(testTitle || 'unknown-test')}`;
 
 /**
  * @param {string} p
@@ -1249,6 +1253,26 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
       },
       { log: false }
     ).then((report) => {
+      const reportTestTitle = report?.reportArtifact?.testTitle || getCurrentTestTitleForMeta();
+      const perTestTrackingKey = toPerTestTrackingKey(reportTestTitle);
+      if (checkpointLabel) {
+        testsWithExplicitCheckpointReports.add(perTestTrackingKey);
+      }
+      const reportFailGroups = Number(report?.counts?.groupedByDisposition?.fail || 0);
+      if (reportFailGroups > 0) {
+        const existingFailEntry = testsWithFailingViolations.get(perTestTrackingKey) || {
+          testKey: reportTestTitle,
+          failGroups: 0,
+          reports: [],
+        };
+        existingFailEntry.failGroups += reportFailGroups;
+        existingFailEntry.reports.push({
+          reportId: report?.reportArtifact?.reportId || 'unknown-report',
+          checkpointLabel: checkpointLabel || null,
+          failGroups: reportFailGroups,
+        });
+        testsWithFailingViolations.set(perTestTrackingKey, existingFailEntry);
+      }
       const rid = report?.reportArtifact?.reportId;
       recordFirstReportIdsFromGroupedReport(report?.groupedViolations, rid);
       resetGhostOverlay();
@@ -1289,17 +1313,30 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
           }
           : {}),
       };
-      cy.log('════════════ 📊 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗦𝗨𝗠𝗠𝗔𝗥𝗬');
+      const ar = report?.reportArtifact || {};
+      const reportCheckpointLabel = String(ar?.checkpointLabel || options?.checkpointLabel || '').trim().toUpperCase();
+      const checkpointTag = reportCheckpointLabel ? ` [CHECKPOINT ${reportCheckpointLabel}]` : '';
+      if (reportCheckpointLabel) {
+        Cypress.log({
+          name: '📍 CHECKPOINT',
+          message: `Results for checkpoint ${reportCheckpointLabel}`,
+          consoleProps: () => ({
+            checkpointLabel: reportCheckpointLabel,
+            reportId: ar.reportId,
+            testTitle: ar.testTitle,
+          }),
+        });
+      }
+      cy.log(`════════════ 📊 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗦𝗨𝗠𝗠𝗔𝗥𝗬${checkpointTag}`);
       Cypress.log({
         name: '',
-        message: '════════════ 📝 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗗𝗘𝗧𝗔𝗜𝗟𝗦 (𝗰𝗼𝗻𝘀𝗼𝗹𝗲 𝗽𝗿𝗼𝗽𝘀)',
+        message: `════════════ 📝 𝗔11𝗬 𝗙𝗜𝗡𝗗𝗜𝗡𝗚 𝗗𝗘𝗧𝗔𝗜𝗟𝗦${checkpointTag} (𝗰𝗼𝗻𝘀𝗼𝗹𝗲 𝗽𝗿𝗼𝗽𝘀)`,
 
         consoleProps: () => summaryForConsole,
       });
       const severityOrder = Array.isArray(report?.severityOrder)
         ? report.severityOrder
         : ['critical', 'serious', 'moderate', 'minor'];
-      const ar = report?.reportArtifact || {};
       severityOrder.forEach((severity) => {
         const issuesCount = Number(groupedBySeverityIssues?.[severity] ?? 0);
         const incompleteCount = Number(groupedBySeverityIncomplete?.[severity] ?? 0);
@@ -1315,7 +1352,7 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
           ? `${issueSummaryLabel}:${issuesCount} | INCOMPLETE:${incompleteCount}`
           : `${issueSummaryLabel}:${issuesCount}`;
         cy.log(
-          `• ${label} ${severityColorMark(severity)} : ${summaryBreakdown}`
+          `•${checkpointTag ? ` ${checkpointTag.trim()}` : ''} ${label} ${severityColorMark(severity)} : ${summaryBreakdown}`
         );
       });
       logGroupedViolations(report.groupedViolations, report.raw);
@@ -1613,7 +1650,18 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
   ensureLiveA11yAutoVisitCommandOverwrite({ setupOptions });
   ensureLiveA11yAutoNavigationHook({ setupOptions, initialScan });
 
-  beforeEach(() => {
+  beforeEach(function liveA11yAutoBeforeEach() {
+    const titlePath = typeof this.currentTest?.titlePath === 'function'
+      ? this.currentTest.titlePath()
+      : this.currentTest?.titlePath;
+    const testKey =
+      (Array.isArray(titlePath) ? titlePath.join(' > ') : undefined) ||
+      this.currentTest?.fullTitle?.() ||
+      this.currentTest?.title ||
+      'unknown-test';
+    const perTestTrackingKey = toPerTestTrackingKey(this.currentTest?.title || testKey);
+    testsWithExplicitCheckpointReports.delete(perTestTrackingKey);
+    testsWithFailingViolations.delete(perTestTrackingKey);
     setActiveLiveA11yStore(createLiveA11yStore());
   });
 
@@ -1626,6 +1674,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       this.currentTest?.fullTitle?.() ||
       this.currentTest?.title ||
       'unknown-test';
+    const perTestTrackingKey = toPerTestTrackingKey(this.currentTest?.title || testKey);
     const runtimeSetupOptions = Cypress.env(LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY) || {};
     const runtimeReportOptions = Cypress.env(LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY) || {};
     const shouldSkipLiveA11y = resolveSkipLiveA11y(runtimeSetupOptions, setupOptions);
@@ -1655,6 +1704,17 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
           setupOptions,
         }),
       });
+      if (stopMonitorAfterEach) {
+        cy.stopLiveA11yMonitor();
+      }
+      cy.then(() => {
+        setActiveLiveA11yStore(null);
+      });
+      return;
+    }
+
+    if (testsWithExplicitCheckpointReports.has(perTestTrackingKey)) {
+      pendingValidationFailuresByTest.delete(testKey);
       if (stopMonitorAfterEach) {
         cy.stopLiveA11yMonitor();
       }
@@ -1748,7 +1808,13 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
   });
 
   after(() => {
-    if (!failRunOnValidationError || pendingValidationFailuresByTest.size === 0) {
+    if (!failRunOnValidationError) {
+      return;
+    }
+    const validationFailureCount = pendingValidationFailuresByTest.size;
+    const failingViolationEntries = [...testsWithFailingViolations.values()]
+      .filter((entry) => Number(entry?.failGroups || 0) > 0);
+    if (validationFailureCount === 0 && failingViolationEntries.length === 0) {
       return;
     }
     Cypress.log({
@@ -1756,14 +1822,37 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       message: '════════════ FINAL RUN FAILURE (STRICT MODE) ════════════',
       consoleProps: () => ({
         failingTests: [...pendingValidationFailuresByTest.keys()],
-        totalFailingTests: pendingValidationFailuresByTest.size,
+        totalFailingValidationTests: validationFailureCount,
+        failingViolationTests: failingViolationEntries.map((entry) => entry.testKey),
+        totalFailingViolationTests: failingViolationEntries.length,
       }),
     });
-    const details = [...pendingValidationFailuresByTest.values()]
+    const validationDetails = [...pendingValidationFailuresByTest.values()]
       .map((entry) => `- ${entry.testKey}\n  ${entry.message.replace(/\n/g, '\n  ')}`)
       .join('\n');
+    const failingViolationDetails = failingViolationEntries
+      .map((entry) => {
+        const reportDetails = (entry.reports || [])
+          .map((reportEntry) => {
+            const checkpointSuffix = reportEntry.checkpointLabel
+              ? ` (checkpoint ${String(reportEntry.checkpointLabel).toUpperCase()})`
+              : '';
+            return `${reportEntry.reportId}${checkpointSuffix}: fail-groups=${reportEntry.failGroups}`;
+          })
+          .join(', ');
+        return `- ${entry.testKey}\n  failing grouped violations: ${entry.failGroups}\n  reports: ${reportDetails}`;
+      })
+      .join('\n');
+    const detailsSections = [
+      validationDetails
+        ? `Validation failures (${validationFailureCount} test(s)):\n${validationDetails}`
+        : '',
+      failingViolationDetails
+        ? `Failing grouped violations detected (${failingViolationEntries.length} test(s)):\n${failingViolationDetails}`
+        : '',
+    ].filter(Boolean);
     throw new Error(
-      `Live a11y strict mode detected validation failures in ${pendingValidationFailuresByTest.size} test(s):\n${details}`
+      `Live a11y strict mode detected failures:\n${detailsSections.join('\n\n')}`
     );
   });
 };
