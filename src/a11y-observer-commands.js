@@ -700,11 +700,6 @@ const severitySectionEmoji = (impact) => {
   }
 };
 
-const outcomeLabel = (violation = {}) => {
-  if (violation?.disposition === 'incomplete') return 'INCOMPLETE (MANUAL REVIEW)';
-  return violation?.disposition === 'warn' ? 'WARNING' : 'FAIL';
-};
-
 const severitySectionTypeLabel = ({ failCount = 0, warnCount = 0, incompleteCount = 0 } = {}) => {
   if (Number(failCount) > 0) return 'VIOLATIONS';
   if (Number(warnCount) > 0) return 'WARNINGS';
@@ -821,6 +816,25 @@ const detectionSummary = (node) => {
   return `LIVEx${liveCount}`;
 };
 
+const detectionPhaseLabel = (node) => {
+  const initialCount = node.initialDetections || 0;
+  const liveCount = node.liveDetections || 0;
+  if (initialCount > 0 && liveCount > 0) return 'SCANS:initial+live';
+  if (initialCount > 0) return 'SCANS:initial';
+  return 'SCANS:live';
+};
+
+const compactPageLabel = (pageUrl) => {
+  if (!pageUrl) return '';
+  const raw = String(pageUrl);
+  try {
+    const parsed = new URL(raw);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return raw.length > 90 ? `${raw.slice(0, 87)}...` : raw;
+  }
+};
+
 const resolveElementsForSelectors = (selectors = []) => {
   const autWindow = Cypress.state('window');
   const autDocument = autWindow?.document;
@@ -912,8 +926,8 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
           ? 'WARNING-ISSUES'
           : 'ISSUES';
       const sectionMessage = currentDispositionBucket === 'incomplete'
-        ? `────── ${sectionEmoji} INCOMPLETE - ${badge} (INCOMPLETE:${severitySummary.incompleteGroups} | N:${severitySummary.incompleteNodes})`
-        : `────── ${sectionEmoji} ${issuePolicyLabel} - ${badge} (${issueSummaryLabel}:${severitySummary.issueGroups} | N:${severitySummary.issueNodes})`;
+        ? `━━━━ ${sectionEmoji} ${badge} INCOMPLETE | groups:${severitySummary.incompleteGroups} | nodes:${severitySummary.incompleteNodes}`
+        : `━━━━ ${sectionEmoji} ${badge} ${issuePolicyLabel} | groups:${severitySummary.issueGroups} | nodes:${severitySummary.issueNodes}`;
       const shouldShowSection = currentDispositionBucket === 'incomplete'
         ? severitySummary.incompleteGroups > 0
         : severitySummary.issueGroups > 0;
@@ -1006,10 +1020,24 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
     const noDomGroupSuffix = missingNodesCount > 0 ? ` [⚠️NO-DOM:${missingNodesCount}]` : '';
     const hiddenGroupSuffix = hiddenNodesCount > 0 ? ` [⚠️HIDDEN:${hiddenNodesCount}]` : '';
     const missingGroupElementsSuffix = `${noDomGroupSuffix}${hiddenGroupSuffix}`;
+    const groupStateDetails = [
+      repeatedNodesInGroup > 0 ? `repeated:${repeatedNodesInGroup}` : '',
+      missingNodesCount > 0 ? `unavailable:${missingNodesCount}` : '',
+      hiddenNodesCount > 0 ? `hidden:${hiddenNodesCount}` : '',
+    ].filter(Boolean);
+    const groupStateSummary = groupStateDetails.length > 0
+      ? ` (${groupStateDetails.join(' · ')})`
+      : '';
+    const ruleDocSuffix = violation.helpUrl
+      ? ` | [More info](${String(violation.helpUrl)})`
+      : '';
+    const ruleHelpUpper = String(violation.help || violation.id || 'UNKNOWN RULE').toUpperCase();
+    const ruleIdLabel = `*(Rule ID: ${violation.id})*`;
+    const logName = `[${colorMark} ${badge}]`;
 
     Cypress.log({
-      name: violation?.disposition === 'incomplete' ? `${colorMark} A11Y-INCOMPLETE` : `${colorMark} A11Y`,
-      message: `#${violationIndex + 1} [${badge}] [${outcomeLabel(violation)}] ${violation.id} - ${violation.help} (NODES:${violation.uniqueNodeCount})${repeatedGroupSuffix}${missingGroupElementsSuffix}`,
+      name: logName,
+      message: `\\#${violationIndex + 1} **${ruleHelpUpper} ${ruleIdLabel}** | NODES:${violation.uniqueNodeCount}${groupStateSummary}${ruleDocSuffix}`,
       $el: groupElements,
       consoleProps: () => ({
         ruleId: violation.id,
@@ -1033,6 +1061,9 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         missingFromDomCount: missingNodesCount,
         unavailableForHighlightCount: unavailableNodesCount,
         axeCoreViolations: violation.rawViolations,
+        groupStateBadges: groupStateDetails,
+        repeatedGroupSuffix,
+        missingGroupElementsSuffix,
       }),
     });
     hasLoggedGroupInSeverity = true;
@@ -1080,15 +1111,26 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
             })
           )
           : visibleNodeElements;
-        const pageHint = node.pageUrl
-          ? ` | page: ${String(node.pageUrl).length > 56
-            ? `${String(node.pageUrl).slice(0, 53)}…`
-            : String(node.pageUrl)
-          }`
+
+        const pageHint = '';
+        // const pageHint = node.pageUrl
+        //   ? ` | PAGE:*${compactPageLabel(node.pageUrl)}*`
+        //   : '';
+
+        const repeatedBadge = wasSeenInPreviousTest
+          ? `repeated`
+          : '';
+        const nodeStateDescriptors = [
+          isMissingFromDom ? 'unavailable' : '',
+          isInDomButHidden ? 'hidden' : '',
+          repeatedBadge,
+        ].filter(Boolean);
+        const nodeStateSuffix = nodeStateDescriptors.length > 0
+          ? ` | NODE: ${nodeStateDescriptors.join(' · ')}`
           : '';
         Cypress.log({
-          name: 'NODE',
-          message: `  -> (${nodeIndex + 1}) ${node.target || '<unknown>'}${pageHint} ${statusTags}`,
+          name: '---(🛠️ Node Fixme)▶',
+          message: `(${nodeIndex + 1}) ${node.target || '<unknown>'} | ${detectionPhaseLabel(node)}${nodeStateSuffix}${pageHint}`,
           $el: highlightElements,
           consoleProps: () => ({
             ruleId: violation.id,
@@ -1117,6 +1159,8 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
             inDomButNotVisible: isInDomButHidden,
             notCurrentlyAvailableForHighlight,
             statusTags,
+            nodeStateBadges: nodeStateDescriptors,
+            detectionPhaseLabel: detectionPhaseLabel(node),
             repeatedFromPreviousTest: wasSeenInPreviousTest,
             firstReportIdInThisSpec: firstSpecReportIdForKey,
           }),
@@ -1393,11 +1437,9 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
         const incompleteCount = Number(groupedBySeverityIncomplete?.[severity] ?? 0);
         const failCount = Number(report?.counts?.groupedBySeverityDisposition?.[severity]?.fail || 0);
         const warnCount = Number(report?.counts?.groupedBySeverityDisposition?.[severity]?.warn || 0);
-        const issueSummaryLabel = failCount > 0
-          ? 'VIOLATION-ISSUES'
-          : warnCount > 0
-            ? 'WARNING-ISSUES'
-            : 'ISSUES';
+        const issueSummaryLabel = (failCount > 0 || warnCount > 0)
+          ? 'CONFIRMED'
+          : 'ISSUES';
         const label = severitySummaryLabel(severity, report?.impactPolicy || {});
         const summaryBreakdown = includeIncompleteInReportInPayload
           ? `${issueSummaryLabel}:${issuesCount} | INCOMPLETE:${incompleteCount}`
