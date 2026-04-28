@@ -992,10 +992,6 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         nodeViolationKey(violation.id, canonicalNodeTarget(node), node.pageUrl, violation.findingType)
       )
     ).length;
-    const repeatedGroupSuffix =
-      repeatedNodesInGroup > 0
-        ? ` [⚠️REPEATED:${repeatedNodesInGroup}]`
-        : '';
     const groupElements = Cypress.$(
       nodesWithDomState.flatMap(
         ({ node, visibleNodeElements, notCurrentlyAvailableForHighlight, fallbackRect }) => {
@@ -1016,10 +1012,6 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
     ).length;
     const missingNodesCount = nodesWithDomState.filter((entry) => entry.isMissingFromDom).length;
     const hiddenNodesCount = nodesWithDomState.filter((entry) => entry.isInDomButHidden).length;
-    const totalNodesCount = nodesWithDomState.length;
-    const noDomGroupSuffix = missingNodesCount > 0 ? ` [⚠️NO-DOM:${missingNodesCount}]` : '';
-    const hiddenGroupSuffix = hiddenNodesCount > 0 ? ` [⚠️HIDDEN:${hiddenNodesCount}]` : '';
-    const missingGroupElementsSuffix = `${noDomGroupSuffix}${hiddenGroupSuffix}`;
     const groupStateDetails = [
       repeatedNodesInGroup > 0 ? `repeated:${repeatedNodesInGroup}` : '',
       missingNodesCount > 0 ? `unavailable:${missingNodesCount}` : '',
@@ -1054,7 +1046,6 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         totalOccurrences: violation.totalOccurrences,
         nodes: violation.nodes,
         nodeDetails: violation.nodeDetails,
-        highlightedTargets: (violation.nodeDetails || []).map((node) => node.target),
         highlightedElementsCount: groupElements.length,
         notCurrentlyInDom: missingNodesCount > 0,
         inDomButNotVisibleCount: hiddenNodesCount,
@@ -1062,8 +1053,7 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         unavailableForHighlightCount: unavailableNodesCount,
         axeCoreViolations: violation.rawViolations,
         groupStateBadges: groupStateDetails,
-        repeatedGroupSuffix,
-        missingGroupElementsSuffix,
+        groupStateLabel: `NODES:${violation.uniqueNodeCount}${groupStateSummary}`,
       }),
     });
     hasLoggedGroupInSeverity = true;
@@ -1091,16 +1081,6 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         const firstSpecReportIdForKey = wasSeenInPreviousTest
           ? getNodeFirstReportIdMapForCurrentSpec().get(nodeKey)
           : undefined;
-        const statusTags = [
-          `[${detectionSummary(node)}]`,
-          wasSeenInPreviousTest
-            ? `[⚠️REPEATED${firstSpecReportIdForKey ? ` → first: ${firstSpecReportIdForKey}` : ''}]`
-            : '',
-          isMissingFromDom ? '[⚠️NO-DOM]' : '',
-          isInDomButHidden ? '[⚠️HIDDEN]' : '',
-        ]
-          .filter(Boolean)
-          .join(' ');
         const highlightElements = notCurrentlyAvailableForHighlight
           ? Cypress.$(
             createGhostNode({
@@ -1112,11 +1092,6 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
           )
           : visibleNodeElements;
 
-        const pageHint = '';
-        // const pageHint = node.pageUrl
-        //   ? ` | PAGE:*${compactPageLabel(node.pageUrl)}*`
-        //   : '';
-
         const repeatedBadge = wasSeenInPreviousTest
           ? `repeated`
           : '';
@@ -1125,24 +1100,21 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
           isInDomButHidden ? 'hidden' : '',
           repeatedBadge,
         ].filter(Boolean);
+        const nodeStatusLabel = nodeStateDescriptors.length > 0
+          ? `NODE: ${nodeStateDescriptors.join(' · ')}`
+          : 'NODE: available';
         const nodeStateSuffix = nodeStateDescriptors.length > 0
-          ? ` | NODE: ${nodeStateDescriptors.join(' · ')}`
+          ? ` | ${nodeStatusLabel}`
           : '';
         Cypress.log({
           name: '---(🛠️ Node Fixme)▶',
-          message: `(${nodeIndex + 1}) ${node.target || '<unknown>'} | ${detectionPhaseLabel(node)}${nodeStateSuffix}${pageHint}`,
+          message: `(${nodeIndex + 1}) ${node.target || '<unknown>'} | ${detectionPhaseLabel(node)}${nodeStateSuffix}`,
           $el: highlightElements,
           consoleProps: () => ({
             ruleId: violation.id,
             pageUrl: node.pageUrl,
             severity: violation.impact,
-            detectionSummary: detectionSummary(node),
-            detectionSummaryVerbose:
-              (node.initialDetections || 0) > 0 && (node.liveDetections || 0) > 0
-                ? `Initial scan + Live scans x${node.liveDetections || 0}`
-                : (node.initialDetections || 0) > 0
-                  ? 'Initial scan'
-                  : `Live scans x${node.liveDetections || 0}`,
+            detectionSummary: detectionPhaseLabel(node),
             initialDetections: node.initialDetections || 0,
             liveDetections: node.liveDetections || 0,
             phases: node.phases || [],
@@ -1153,12 +1125,11 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
             any: node.any || [],
             all: node.all || [],
             none: node.none || [],
-            highlightedTarget: node.target,
             highlightedElementsCount: highlightElements.length,
             notCurrentlyInDom: isMissingFromDom,
             inDomButNotVisible: isInDomButHidden,
             notCurrentlyAvailableForHighlight,
-            statusTags,
+            nodeStatusLabel,
             nodeStateBadges: nodeStateDescriptors,
             detectionPhaseLabel: detectionPhaseLabel(node),
             repeatedFromPreviousTest: wasSeenInPreviousTest,
