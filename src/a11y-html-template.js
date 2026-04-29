@@ -1397,7 +1397,7 @@ const renderLiveA11yReportHtml = (report) => {
   <a href="#main-content" class="skip-link">Skip to report content</a>
   <main class="wrap" id="main-content">
     <h1 id="top">wick-a11y-observer accessibility report</h1>
-    <p class="subtle">Readable summary of grouped axe-core findings (violations and optional incomplete/manual-review items). Open <strong>Rule docs</strong> for remediation.</p>
+    <p class="subtle">Readable summary of axe-core findings (violations and optional incomplete/manual-review items).</p>
     <div class="summary-groups" aria-label="Top summary sections">
       <section class="summary-group summary-group-identity" aria-label="Report identity">
         <h2>Report Identity</h2>
@@ -1426,7 +1426,7 @@ const renderLiveA11yReportHtml = (report) => {
         </details>
       </section>
     </div>
-    <h2 class="severity-entry-title">By severity (grouped findings)</h2>
+    <h2 class="severity-entry-title">By severity (rules grouped findings)</h2>
     <div class="sev-pills">${sevPills || "<span class=\"subtle\">No grouped findings in output.</span>"}</div>
     ${errorsBlock}
     ${bySeveritySections || "<p class=\"subtle\">No grouped findings to show.</p>"}

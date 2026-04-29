@@ -926,8 +926,8 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
           ? 'WARNING-ISSUES'
           : 'ISSUES';
       const sectionMessage = currentDispositionBucket === 'incomplete'
-        ? `━━━━ ${sectionEmoji} ${badge} INCOMPLETE | groups:${severitySummary.incompleteGroups} | nodes:${severitySummary.incompleteNodes}`
-        : `━━━━ ${sectionEmoji} ${badge} ${issuePolicyLabel} | groups:${severitySummary.issueGroups} | nodes:${severitySummary.issueNodes}`;
+        ? `━━━━ ${sectionEmoji} ${badge} INCOMPLETE | rules:${severitySummary.incompleteGroups} | nodes:${severitySummary.incompleteNodes}`
+        : `━━━━ ${sectionEmoji} ${badge} ${issuePolicyLabel} | rules:${severitySummary.issueGroups} | nodes:${severitySummary.issueNodes}`;
       const shouldShowSection = currentDispositionBucket === 'incomplete'
         ? severitySummary.incompleteGroups > 0
         : severitySummary.issueGroups > 0;
