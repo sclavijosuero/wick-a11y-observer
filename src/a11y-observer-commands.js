@@ -1,11 +1,28 @@
 import { attachLiveA11yMonitor, createLiveA11yStore, installLiveA11yMonitorOnWindow } from './a11y-setup';
+import {
+  AXE_IMPACT_ORDER,
+  DEFAULT_ACCESSIBILITY_RESULTS_FOLDER,
+} from './a11y-shared-constants.js';
 
-const DEFAULT_ACCESSIBILITY_RESULTS_FOLDER = 'cypress/accessibility';
+/**
+ * Browser-side Cypress commands for live axe monitoring: install/arm/stop the monitor, run scans,
+ * push results to the Node reporter task, and surface findings in the command log (highlights,
+ * “ghost” rects, metrics). Also wires auto-lifecycle behavior (`cy.visit` / navigations) when
+ * `registerLiveA11yAutoLifecycle` runs at the end of this file.
+ *
+ * Rough layout (top → bottom): env keys and shared state → runtime option bridges → report paths /
+ * default axe options → store + env resolution → cross-test repeat tracking → command-log UX →
+ * explicit `cy.*` commands → `reportLiveA11yResults` → auto-lifecycle visit/navigation hooks.
+ */
+
+// --- Env var names + keys on Cypress.expose (mirrored for Node task / docs) ---
 const LIVE_A11Y_AUTO_REPORT_OPTIONS_ENV_KEY = '__liveA11yAutoReportOptions';
 const LIVE_A11Y_AUTO_SETUP_OPTIONS_ENV_KEY = '__liveA11yAutoSetupOptions';
 const LIVE_A11Y_INCLUDE_INCOMPLETE_ENV_VAR = 'LIVE_A11Y_INCLUDE_INCOMPLETE';
 const LIVE_A11Y_GENERATE_REPORTS_ENV_VAR = 'LIVE_A11Y_GENERATE_REPORTS';
 const LIVE_A11Y_RUN_ENV_VAR = 'LIVE_A11Y_RUN';
+
+// --- Mutable state for auto lifecycle: active store, per-test overrides, checkpoint/failure maps ---
 let liveA11yAutoActiveStore = null;
 let liveA11yAutoRuntimeSetupOptions = undefined;
 let liveA11yAutoRuntimeReportOptions = undefined;
@@ -17,6 +34,7 @@ let liveA11yRuntimeEnvConfig = {
 const testsWithExplicitCheckpointReports = new Set();
 const testsWithFailingViolations = new Map();
 
+// --- Runtime setup/report overrides (`cy.setLiveA11yAuto*`) exposed via Cypress.expose for hooks + tasks ---
 const setActiveLiveA11yStore = (store) => {
   liveA11yAutoActiveStore = store || null;
 };
@@ -59,6 +77,7 @@ const setLiveA11yRuntimeEnvConfig = (config = {}) => {
 
 const toPerTestTrackingKey = (testTitle) => `${currentSpecKey()}::${String(testTitle || 'unknown-test')}`;
 
+// --- Default JSON/HTML paths, reportId, and metadata (spec stem, timestamp, test ordinal) ---
 /**
  * @param {string} p
  * @returns {string}
@@ -205,6 +224,7 @@ const buildLiveA11yOutputPathAndMeta = (outputPathOverride, namingOptions = {}) 
   };
 };
 
+// --- Default axe profile (WCAG tags, impacts) + normalize user overrides ---
 const AXE_STANDARD_TAGS = [
   'wcag2a',
   'wcag2aa',
@@ -224,13 +244,11 @@ const DEFAULT_AXE_SCAN_OPTIONS = {
   },
 };
 
-const IMPACT_SEVERITY_ORDER = ['critical', 'serious', 'moderate', 'minor'];
-
 const normalizeImpactLevels = (values) => {
   if (!Array.isArray(values)) return [];
   const normalized = values
     .map((value) => String(value || '').trim().toLowerCase())
-    .filter((value) => IMPACT_SEVERITY_ORDER.includes(value));
+    .filter((value) => AXE_IMPACT_ORDER.includes(value));
   return [...new Set(normalized)];
 };
 
@@ -245,6 +263,7 @@ const normalizeRunOnlyValues = (runOnly) => {
   return [...new Set(values.map((value) => String(value || '').trim()).filter(Boolean))];
 };
 
+// --- Shared monitor store: checkpoint policy metadata, scan type, clear live buffer before one-off scans ---
 const syncCheckpointScanPolicyOnStore = (store, axeOptions = {}) => {
   if (!store || typeof store !== 'object') return;
   if (!store.meta || typeof store.meta !== 'object') {
@@ -363,6 +382,7 @@ const mergeA11yRunOptions = (baseOptions = {}, overrideOptions = {}) => ({
   },
 });
 
+// --- Booleans from options/env strings + precedence chain (explicit options beat LIVE_A11Y_* env) ---
 const parseOptionalBoolean = (value) => {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') {
@@ -429,6 +449,7 @@ const resolveSkipLiveA11y = (...optionSources) => {
   return true;
 };
 
+// --- Refresh cached env-driven toggles from Cypress.env (read in beforeEach for each test) ---
 const refreshLiveA11yRuntimeEnvConfigFromCyEnv = () =>
   cy.env([
     LIVE_A11Y_RUN_ENV_VAR,
@@ -442,6 +463,7 @@ const refreshLiveA11yRuntimeEnvConfigFromCyEnv = () =>
     });
   });
 
+// --- Per-spec cross-test tracking: repeated nodes, emission counters, auto checkpoint labels ---
 // Tracks previously seen rule+node pairs across tests in the same spec file
 // (key includes normalized page URL so the same target on a different page is not "repeated").
 const seenNodeViolationsBySpec = new Map();
@@ -455,6 +477,7 @@ const specToNodeKeyFirstReportId = new Map();
 
 const currentSpecKey = () => Cypress.spec?.relative || Cypress.spec?.name || 'unknown-spec';
 
+// --- Stable keys for node+page and first report id (HTML + command log “repeated” context) ---
 const getNodeFirstReportIdMapForCurrentSpec = () => {
   const k = currentSpecKey();
   if (!specToNodeKeyFirstReportId.has(k)) {
@@ -518,6 +541,7 @@ const getAndIncrementAutoCheckpointLabelForCurrentTest = () => {
   return `checkpoint-${toAlphabeticLabel(next)}`;
 };
 
+// --- Mocha test identity from runnable context (hooks vs `it`) for titles and ordinals ---
 /**
  * Mocha `it()` for the test case, not a hook. In `afterEach` the active `runnable` is
  * a hook, so `ctx.test` is the hook — the finished `it` is on `ctx.currentTest`.
@@ -610,6 +634,8 @@ const getTestOrdinalInCurrentMochaSuite = () => {
     return null;
   }
 };
+
+// --- Ghost overlay + severity chrome for command-log highlights when nodes are missing/hidden ---
 const GHOST_OVERLAY_ID = 'live-axe-ghost-overlay';
 
 const getSeenNodeSetForCurrentSpec = () => {
@@ -853,6 +879,7 @@ const resolveElementsForSelectors = (selectors = []) => {
   return Cypress.$(elements);
 };
 
+// --- Emit Cypress.log hierarchy for grouped rules + nodes ($el highlights; ghosts when no DOM match) ---
 const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
   const previouslySeenNodeKeys = getSeenNodeSetForCurrentSpec();
   const currentTestNodeKeys = new Set();
@@ -1144,6 +1171,7 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
   currentTestNodeKeys.forEach((key) => previouslySeenNodeKeys.add(key));
 };
 
+// --- Explicit monitor API: setup, initial scan, checkpoint scan, idle wait, stop, read store ---
 Cypress.Commands.add('setupCoreLiveA11yMonitor', (monitorOptions = {}) => {
   const store = createLiveA11yStore();
   attachLiveA11yMonitor(store, monitorOptions);
@@ -1281,6 +1309,7 @@ Cypress.Commands.add('getLiveA11yResults', () => {
   });
 });
 
+// --- Build JSON/HTML via Node task, merge repeat metadata, drive summary logs + strict-mode bookkeeping ---
 Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
   const throwOnValidationFailure = options.throwOnValidationFailure !== false;
   const includeIncompleteInReport = resolveIncludeIncompleteInReport(options);
@@ -1402,7 +1431,7 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
       });
       const severityOrder = Array.isArray(report?.severityOrder)
         ? report.severityOrder
-        : ['critical', 'serious', 'moderate', 'minor'];
+        : AXE_IMPACT_ORDER;
       severityOrder.forEach((severity) => {
         const issuesCount = Number(groupedBySeverityIssues?.[severity] ?? 0);
         const incompleteCount = Number(groupedBySeverityIncomplete?.[severity] ?? 0);
@@ -1465,6 +1494,7 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
   });
 });
 
+// --- Fail the current test from a hook without throwing (Mocha runner.fail), for validation errors ---
 const resolveCurrentTestFromHookContext = (hookThis) => {
   if (hookThis?.currentTest) {
     return hookThis.currentTest;
@@ -1490,6 +1520,7 @@ const markTestAsFailedWithoutThrowingHook = (hookThis, message, report) => {
   test.state = 'failed';
 };
 
+// --- One-shot per-test overrides consumed by auto lifecycle hooks (`afterEach` / `beforeEach`) ---
 Cypress.Commands.add('setLiveA11yAutoReportOptions', (options = {}) => {
   return cy.then(() => {
     setLiveA11yAutoReportRuntimeOptions(options);
@@ -1502,6 +1533,7 @@ Cypress.Commands.add('setLiveA11yAutoSetupOptions', (options = {}) => {
   });
 });
 
+// --- Merge register-time setup with runtime overrides; fast idle defaults before navigation flush ---
 const mergeLiveA11ySetupOptions = (base = {}, override = {}) => ({
   ...base,
   ...override,
@@ -1527,6 +1559,7 @@ const resolveAutoLifecycleSetupOptions = (setupOptions = {}, runtimeSetupOptions
     )
   );
 
+// --- Cypress.log banner for auto lifecycle validation outcome (pass vs deferred failure) ---
 const logLiveA11yValidationMarker = ({
   testKey,
   reportPath,
@@ -1570,6 +1603,7 @@ const logLiveA11yValidationMarker = ({
   });
 };
 
+// --- Install-once guards + aggressive settle defaults for navigation-driven flush scans ---
 let isLiveA11yAutoNavigationHookInstalled = false;
 let isLiveA11yAutoVisitCommandOverwriteInstalled = false;
 let isLiveA11yAutoLifecycleRegistered = false;
@@ -1581,6 +1615,7 @@ const AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP = {
   },
 };
 
+// --- Auto lifecycle: wrap cy.visit so AUT gets monitor + shared store before load ---
 const ensureLiveA11yAutoVisitCommandOverwrite = ({ setupOptions }) => {
   if (isLiveA11yAutoVisitCommandOverwriteInstalled) {
     return;
@@ -1634,6 +1669,7 @@ const ensureLiveA11yAutoVisitCommandOverwrite = ({ setupOptions }) => {
   isLiveA11yAutoVisitCommandOverwriteInstalled = true;
 };
 
+// --- Non-cy.visit navigations: window:before:load installs monitor; load runs initial scan + arm ---
 const ensureLiveA11yAutoNavigationHook = ({ setupOptions, initialScan }) => {
   if (isLiveA11yAutoNavigationHookInstalled) {
     return;
@@ -1685,16 +1721,30 @@ const ensureLiveA11yAutoNavigationHook = ({ setupOptions, initialScan }) => {
 };
 
 /**
- * Registers global hooks once (from cypress/support/e2e.js) for low-instrumentation
- * live a11y checks. It hooks each page load so initial scan + arm happens for
- * cy.visit() and click-driven full navigations alike.
+ * Registers global Cypress hooks once (typically from `cypress/support/e2e.js`) so apps get
+ * live accessibility monitoring with little boilerplate: initial scan + armed monitor on navigations,
+ * per-test reporting, and optional strict failure handling at end of run.
+ *
+ * High-level flow:
+ * 1. One-time wiring — patch `cy.visit` and listen for loads so each URL gets an initial axe scan
+ *    and the monitor arms (`ensureLiveA11yAutoVisitCommandOverwrite`, `ensureLiveA11yAutoNavigationHook`).
+ * 2. `beforeEach` — new monitor store, reset per-test checkpoint/failure tracking, refresh env-based toggles.
+ * 3. `afterEach` — unless skipped or checkpoint-handled, wait for DOM idle, emit JSON/HTML report + validation;
+ *    fail the test or queue failures for the suite-level `after` hook depending on options.
+ * 4. `after` (when strict) — single aggregate error so CI sees one clear failure after retries.
+ *
  * @param {object} [options]
  */
 export const registerLiveA11yAutoLifecycle = (options = {}) => {
+  // Idempotent: importing this module multiple times must not stack hooks.
   if (isLiveA11yAutoLifecycleRegistered) {
     return;
   }
+
   isLiveA11yAutoLifecycleRegistered = true;
+
+  // Defaults control monitor aggressiveness, idle wait before reporting, validation strictness,
+  // and whether the suite-level `after` hook enforces failures across tests.
   const {
     setupOptions = {
       observerOptions: { fallbackFullPageScan: { enabled: false } },
@@ -1709,11 +1759,16 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     failRunOnValidationError = true,
     stopMonitorAfterEach = true,
   } = options;
+
+  // When validation fails but we avoid throwing inside `afterEach` (and when deferring to suite strict mode),
+  // entries accumulate here so `after` can throw one consolidated error with every failing test.
   const pendingValidationFailuresByTest = new Map();
 
+  // Install navigation-time behavior: ensure monitor exists on visited windows and run initial scan + arm.
   ensureLiveA11yAutoVisitCommandOverwrite({ setupOptions });
   ensureLiveA11yAutoNavigationHook({ setupOptions, initialScan });
 
+  // --- Per test: isolate monitor state and env-driven overrides ---
   beforeEach(function liveA11yAutoBeforeEach() {
     const titlePath = typeof this.currentTest?.titlePath === 'function'
       ? this.currentTest.titlePath()
@@ -1724,12 +1779,15 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       this.currentTest?.title ||
       'unknown-test';
     const perTestTrackingKey = toPerTestTrackingKey(this.currentTest?.title || testKey);
+    // Checkpoint-only tests manage their own reports; reset markers so this test starts clean.
     testsWithExplicitCheckpointReports.delete(perTestTrackingKey);
     testsWithFailingViolations.delete(perTestTrackingKey);
     setActiveLiveA11yStore(createLiveA11yStore());
+    // Pick up LIVE_A11Y_* env for this test run (generate reports, include incomplete, etc.).
     refreshLiveA11yRuntimeEnvConfigFromCyEnv();
   });
 
+  // --- Per test: report, validate, optionally fail test or record for suite strict mode ---
   afterEach(function liveA11yAutoAfterEach() {
     const titlePath = typeof this.currentTest?.titlePath === 'function'
       ? this.currentTest.titlePath()
@@ -1755,8 +1813,11 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       runtimeReportOptions,
       reportOptions
     );
+    // Runtime options apply only to the current test; clear so the next test does not inherit them.
     clearLiveA11yAutoReportRuntimeOptions();
     clearLiveA11yAutoSetupRuntimeOptions();
+
+    // User turned live a11y off for this run — skip reporting and tear down without failing.
     if (shouldSkipLiveA11y) {
       pendingValidationFailuresByTest.delete(testKey);
       Cypress.log({
@@ -1778,6 +1839,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       return;
     }
 
+    // Checkpoints already produced report(s); avoid duplicate auto report for the same test body.
     if (testsWithExplicitCheckpointReports.has(perTestTrackingKey)) {
       pendingValidationFailuresByTest.delete(testKey);
       if (stopMonitorAfterEach) {
@@ -1789,6 +1851,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       return;
     }
 
+    // Merge static defaults, register-time options, and `cy.setLiveA11yAutoReportOptions` overrides.
     const resolvedReportOptions = {
       ...reportOptions,
       ...runtimeReportOptions,
@@ -1799,6 +1862,8 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
         ...(runtimeReportOptions.validation || {}),
       },
     };
+
+    // Let mutations and monitor queue drain before snapshotting results into the report.
     cy.waitForLiveA11yIdle(waitForIdleOptions).then(
       () => null,
       (error) => {
@@ -1814,15 +1879,18 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
         return null;
       }
     );
+
+    // Node task builds JSON/HTML; validation runs there too. Suppress task throw so we can
+    // choose per-test failure vs suite-level strict aggregation (`failTestOnValidationError`).
     cy.reportLiveA11yResults({
       ...resolvedReportOptions,
-      // Avoid hook throw. We fail the test directly below.
       throwOnValidationFailure: false,
     }).then((report) => {
       const failCount = Number(report?.counts?.groupedByDisposition?.fail || 0);
       const warnCount = Number(report?.counts?.groupedByDisposition?.warn || 0);
       const incompleteCount = Number(report?.counts?.groupedByDisposition?.incomplete || 0);
       const includeIncompleteInReportInPayload = report?.reportOptions?.includeIncompleteInReport === true;
+      // Node validation (min scans, initial scan present, etc.) passed — clear any stale strict-mode entry.
       if (report?.validation?.valid) {
         pendingValidationFailuresByTest.delete(testKey);
         logLiveA11yValidationMarker({
@@ -1836,6 +1904,8 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
         });
         return;
       }
+
+      // Record for suite `after` and optionally mark this test failed without throwing in the hook.
       const validationErrors = Array.isArray(report?.validation?.errors)
         ? report.validation.errors
         : ['Unknown validation error'];
@@ -1862,8 +1932,11 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
       if (!failTestOnValidationError) {
         return;
       }
+      // Throwing inside Cypress hooks is brittle; mark failed like an assertion would.
       markTestAsFailedWithoutThrowingHook(this, message, report);
     });
+
+    // Prevent monitor state and timers from leaking into the next test.
     if (stopMonitorAfterEach) {
       cy.stopLiveA11yMonitor();
     }
@@ -1872,6 +1945,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     });
   });
 
+  // --- Suite end: optional single failure listing every validation issue and grouped violation failures ---
   after(() => {
     if (!failRunOnValidationError) {
       return;
@@ -1879,6 +1953,7 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     const validationFailureCount = pendingValidationFailuresByTest.size;
     const failingViolationEntries = [...testsWithFailingViolations.values()]
       .filter((entry) => Number(entry?.failGroups || 0) > 0);
+    // Nothing to enforce — strict mode is a no-op for fully passing runs.
     if (validationFailureCount === 0 && failingViolationEntries.length === 0) {
       return;
     }
@@ -1908,6 +1983,8 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
         return `- ${entry.testKey}\n  failing grouped violations: ${entry.failGroups}\n  reports: ${reportDetails}`;
       })
       .join('\n');
+
+    // One throw after all specs gives CI a deterministic failure (esp. when per-test hooks are skipped or retried).
     const detailsSections = [
       validationDetails
         ? `Validation failures (${validationFailureCount} test(s)):\n${validationDetails}`

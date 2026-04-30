@@ -33,7 +33,7 @@ Register the Node-side reporter task in `cypress.config.js`:
 
 ```js
 const { defineConfig } = require("cypress");
-const { registerLiveA11yReporterTasks } = require("./src/a11y-reporter");
+const { registerLiveA11yReporterTasks } = require("wick-a11y-observer/reporter");
 
 module.exports = defineConfig({
   // Override output folder for generated .json/.html accessibility reports
@@ -46,6 +46,8 @@ module.exports = defineConfig({
   },
 });
 ```
+
+When developing this plugin from a local clone, you can require the reporter the same way as in this repository’s `cypress.config.js` (for example `require("./src/a11y-reporter")` relative to the project root).
 
 ---
 

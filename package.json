@@ -4,6 +4,10 @@
   "description": "Cypress plugin: observe DOM changes, scan for a11y issues, and report them during tests.",
   "main": "src/a11y-observer-commands.js",
   "types": "src/a11y-observer-commands.d.ts",
+  "exports": {
+    ".": "./src/a11y-observer-commands.js",
+    "./reporter": "./src/a11y-reporter.js"
+  },
   "scripts": {
     "cypress:open": "cypress open --e2e --browser chrome",
     "cypress:run": "cypress run --browser chrome",

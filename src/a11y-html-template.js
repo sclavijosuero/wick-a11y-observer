@@ -1,3 +1,4 @@
+const { AXE_IMPACT_ORDER } = require("./a11y-shared-constants");
 const { A11Y_REPORT_DISCLAIMER_LINES } = require("./a11y-disclaimer");
 
 /**
@@ -436,7 +437,7 @@ const renderLiveA11yReportHtml = (report) => {
   const bySevDisposition = counts.groupedBySeverityDisposition || {};
   const bySevIssues = counts.groupedBySeverityIssues || {};
   const bySevIncomplete = counts.groupedBySeverityIncomplete || {};
-  const sevOrder = report.severityOrder || ["critical", "serious", "moderate", "minor"];
+  const sevOrder = report.severityOrder || AXE_IMPACT_ORDER;
   const violations = report.groupedViolations || [];
   const monitorMeta = report.meta || {};
   const analysisMeta = monitorMeta.analysis || {};

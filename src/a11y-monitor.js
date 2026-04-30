@@ -1,3 +1,4 @@
+import { AXE_IMPACT_ORDER } from './a11y-shared-constants.js';
 
 export const DEFAULT_SEMANTIC_ROOT_SELECTOR = [
   '[popover]',
@@ -58,8 +59,6 @@ function createDefaultStore() {
   };
 }
 
-const IMPACT_LEVELS = ['critical', 'serious', 'moderate', 'minor'];
-
 function getConfiguredImpactsFromA11yOptions(axeOptions) {
   if (axeOptions && Object.prototype.hasOwnProperty.call(axeOptions, 'includedImpacts')) {
     return axeOptions.includedImpacts;
@@ -73,13 +72,13 @@ function getConfiguredImpactsFromA11yOptions(axeOptions) {
 function normalizeImpactLevelsFromA11yOptions(axeOptions) {
   const configured = getConfiguredImpactsFromA11yOptions(axeOptions);
   if (configured === undefined) {
-    return [...IMPACT_LEVELS];
+    return [...AXE_IMPACT_ORDER];
   }
   if (!Array.isArray(configured) || configured.length === 0) {
     return [];
   }
 
-  const allowed = new Set(IMPACT_LEVELS);
+  const allowed = new Set(AXE_IMPACT_ORDER);
   return [...new Set(configured.map((level) => String(level).toLowerCase()))].filter((level) =>
     allowed.has(level)
   );
@@ -94,7 +93,7 @@ function normalizeWarnImpactLevelsFromA11yOptions(axeOptions) {
     return [];
   }
 
-  const allowed = new Set(IMPACT_LEVELS);
+  const allowed = new Set(AXE_IMPACT_ORDER);
   return [...new Set(configured.map((level) => String(level).toLowerCase()))].filter((level) =>
     allowed.has(level)
   );
@@ -119,7 +118,7 @@ function getExplicitImpactFilterFromA11yOptions(axeOptions) {
     return null;
   }
 
-  const allowed = new Set(IMPACT_LEVELS);
+  const allowed = new Set(AXE_IMPACT_ORDER);
   const normalizedIncluded = Array.isArray(configuredIncluded)
     ? [...new Set(configuredIncluded.map((level) => String(level).toLowerCase()))].filter((level) =>
       allowed.has(level)
