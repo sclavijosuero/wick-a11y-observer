@@ -2,6 +2,12 @@
  * Static labels, metric key ordering, and helpers for the technical metrics section of live-a11y reports.
  */
 
+// -----------------------------------------------------------------------------
+// Violation-focused technical metrics (ordering)
+// Keys match counted fields in the report payload. Order is intentional: raw initial
+// counts, live deltas excluding overlap with initial, then combined totals—so readers
+// can reconcile “initial vs live vs sum” without hunting arbitrary object key order.
+// -----------------------------------------------------------------------------
 const ISSUE_TECHNICAL_METRIC_ORDER = [
   "initialViolationsRaw",
   "liveDistinctViolationInstancesExcludingInitial",
@@ -10,6 +16,13 @@ const ISSUE_TECHNICAL_METRIC_ORDER = [
   "liveDistinctNodesWithIssuesExcludingInitial",
   "totalNodesInitialPlusLiveDistinct",
 ];
+
+// -----------------------------------------------------------------------------
+// Incomplete-rule technical metrics (ordering)
+// Mirrors the violation block but for axe “incomplete” (needs manual review). Kept
+// separate so UIs can omit the whole incomplete subsection when `includeIncompleteInReport`
+// is false or when no incomplete metrics are present.
+// -----------------------------------------------------------------------------
 const INCOMPLETE_TECHNICAL_METRIC_ORDER = [
   "initialIncompleteRaw",
   "liveDistinctIncompleteInstancesExcludingInitial",
@@ -18,11 +31,23 @@ const INCOMPLETE_TECHNICAL_METRIC_ORDER = [
   "liveDistinctNodesWithIncompleteExcludingInitial",
   "totalNodesIncompleteInitialPlusLiveDistinct",
 ];
+
+// -----------------------------------------------------------------------------
+// Monitor runtime / pipeline health
+// Operational counters (not a11y findings): how much scanning ran, what was dropped
+// under load, and internal monitor failures—useful for diagnosing flaky runs vs real violations.
+// -----------------------------------------------------------------------------
 const RUNTIME_TECHNICAL_METRIC_ORDER = [
   "liveScansCaptured",
   "monitorDroppedScans",
   "monitorErrors",
 ];
+
+// -----------------------------------------------------------------------------
+// Cross-report deduplication metrics (canonical key list)
+// Tracks overlap with earlier emissions in the same spec (repeat scans / checkpoints).
+// `buildTechnicalMetricOrder` inlines a subset of these keys with extra gating for incomplete dupes.
+// -----------------------------------------------------------------------------
 const DUPLICATE_TECHNICAL_METRIC_ORDER = [
   "duplicatedViolationsFromEarlierReports",
   "duplicatedIncompleteFindingsFromEarlierReports",
@@ -30,6 +55,11 @@ const DUPLICATE_TECHNICAL_METRIC_ORDER = [
   "previousReportsInSpec",
 ];
 
+// -----------------------------------------------------------------------------
+// Display copy + cross-links for HTML / console “technical metrics” UI
+// Each entry supplies a short label, longer description, and `related` keys so templates
+// can surface “see also” context without duplicating prose in every consumer.
+// -----------------------------------------------------------------------------
 const TECHNICAL_METRIC_HELP = {
   initialViolationsRaw: {
     label: "Initial full-page violations (raw rule groups)",
@@ -147,6 +177,12 @@ const TECHNICAL_METRIC_HELP = {
   },
 };
 
+// -----------------------------------------------------------------------------
+// Dynamic metric key sequence for a single report
+// Composes violation metrics always; adds incomplete + incomplete-duplicate rows only when
+// relevant (respects `includeIncompleteInReport` and non-zero values). Appends runtime
+// then dedupe keys so reports stay readable when incomplete sections are hidden.
+// -----------------------------------------------------------------------------
 const buildTechnicalMetricOrder = (
   technicalMetrics = {},
   { includeIncompleteInReport = true } = {}
@@ -168,6 +204,9 @@ const buildTechnicalMetricOrder = (
   ];
 };
 
+// -----------------------------------------------------------------------------
+// Public surface for the reporter: static orders/help plus `buildTechnicalMetricOrder`.
+// -----------------------------------------------------------------------------
 module.exports = {
   ISSUE_TECHNICAL_METRIC_ORDER,
   INCOMPLETE_TECHNICAL_METRIC_ORDER,

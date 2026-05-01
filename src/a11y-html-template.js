@@ -1,12 +1,24 @@
 const { AXE_IMPACT_ORDER } = require("./a11y-shared-constants");
-const { A11Y_REPORT_DISCLAIMER_LINES } = require("./a11y-disclaimer");
+
+/** Default footnote lines for HTML reports; terminal/JSON emission reuse via exports. */
+const A11Y_REPORT_DISCLAIMER_LINES = [
+  "Note: Automated testing finds ~57% of WCAG issues. Analyzes visible DOM elements only.",
+  "Axe-core® (github.com/dequelabs/axe-core) is a trademark of Deque Systems, Inc (deque.com).",
+];
+
+const A11Y_REPORT_DISCLAIMER = A11Y_REPORT_DISCLAIMER_LINES.join("\n");
 
 /**
- * Renders a human-readable HTML view of a live-a11y report payload
- * (same shape as written to cypress/accessibility/*.json by liveA11yReporter).
- * @param {object} report
- * @returns {string}
+ * Single-file HTML renderer for live-a11y JSON payloads (Cypress reporter output).
+ *
+ * Rough layout (top → bottom of this file):
+ *   Escaping & micro-UI bits → report identity helpers → severity/disposition styling helpers →
+ *   node scan provenance → axe rule + failure-summary presentation → node rows / violation cards →
+ *   metrics fallback & main template assembly (includes large embedded `<style>` so the HTML opens standalone).
  */
+
+// --- Escaping & small presentation primitives (safe text + disclaimer links + option pills) ---
+/** Escape text for HTML bodies so JSON/report strings cannot break markup or inject scripts. */
 const escapeHtml = (value) => {
   if (value == null) return "";
   return String(value)
@@ -16,6 +28,7 @@ const escapeHtml = (value) => {
     .replace(/"/g, "&quot;");
 };
 
+/** Turn disclaimer plaintext into HTML with safe links for axe-core / Deque references. */
 const renderDisclaimerLineHtml = (line) =>
   escapeHtml(line)
     .replace(
@@ -27,11 +40,13 @@ const renderDisclaimerLineHtml = (line) =>
       '<a href="https://deque.com" target="_blank" rel="noopener noreferrer">deque.com</a>'
     );
 
+/** Render configured axe tags / impacts as compact pills in “Analysis options”. */
 const renderOptionPills = (values = []) =>
   values
     .map((value) => `<span class="option-pill">${escapeHtml(value)}</span>`)
     .join(" ");
 
+// --- Report artifact helpers (identity strings, timestamps, deduped option lists) ---
 const uniqueStringValues = (...groups) => [
   ...new Set(
     groups
@@ -42,6 +57,7 @@ const uniqueStringValues = (...groups) => [
   ),
 ];
 
+/** Derive `T01`-style suffix from `reportId` or numeric test index for titles / labels. */
 const reportSuffixFromArtifact = (artifact = {}) => {
   const reportIdMatch = String(artifact.reportId || "").match(/--(T\d+)(?:-|$)/i);
   if (reportIdMatch) {
@@ -53,6 +69,7 @@ const reportSuffixFromArtifact = (artifact = {}) => {
   return `T${String(artifact.testNumberInSpec).padStart(2, "0")}`;
 };
 
+/** Human-friendly local datetime for identity rows (“generated at”). */
 const formatIsoLocal = (iso) => {
   if (!iso) return "—";
   try {
@@ -65,6 +82,7 @@ const formatIsoLocal = (iso) => {
   }
 };
 
+// --- Severity & disposition → CSS classes and human labels (matches reporter impact policy semantics) ---
 const severityClass = (impact) => {
   const s = String(impact || "").toLowerCase();
   if (s === "critical") return "sev-critical";
@@ -132,6 +150,7 @@ const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}, i
   return "VIOLATIONS";
 };
 
+// --- Per-node “initial vs live” scan breakdown (mirrors JSON source labels / occurrence counts) ---
 const INITIAL_SOURCE = "full-page";
 
 /** Pairs counts with the same human labels used in the JSON (`source` + `sourceLabel`). */
@@ -189,6 +208,7 @@ const renderNodeSourceAndCounts = (node) => {
   return `<div class="source-counts">${initialBlock}${liveBlock}</div>`;
 };
 
+/** One-line rule-level summary of which scan roots contributed (for cards / meta). */
 const formatRuleSourceSummary = (v) => {
   const sources = v.sources || [];
   const labels = (v.sourceLabels && v.sourceLabels.length === sources.length
@@ -198,12 +218,7 @@ const formatRuleSourceSummary = (v) => {
   return sources.map((s, i) => labels[i] || s).join(" — ");
 };
 
-/**
- * axe-core `failureSummary` often starts with "Fix any of the following:" — show that as the summary and the rest in an expandable block.
- * @param {string | null | undefined} text
- * @returns {string}
- */
-
+// --- Axe documentation block + failure-summary UX (Deque links, expandable axe messages) ---
 /**
  * Rule-level context from grouped violation (Deque link, help, description, tags).
  * @param {object} v
@@ -227,6 +242,10 @@ const renderA11yRuleReference = (v) => {
 </section>`;
 };
 
+/**
+ * axe-core `failureSummary` often starts with “Fix any of the following:” — use that line as the
+ * `<summary>` and tuck the remainder in an expandable `<details>` so long hints stay scannable.
+ */
 const renderFailureSummaryBlock = (text) => {
   const raw = text == null ? "" : String(text).replace(/\r\n/g, "\n");
   if (!raw.trim()) {
@@ -246,6 +265,7 @@ const renderFailureSummaryBlock = (text) => {
 </details>`;
 };
 
+// --- Table rows for affected nodes (target, page URL, recurrence, scans, HTML snippet) ---
 /**
  * @param {object[]} nodeDetails
  * @param {string} [ruleId]
@@ -357,6 +377,7 @@ const renderNodeRows = (nodeDetails, ruleId) => {
     .join("");
 };
 
+/** One grouped rule card: header, axe reference, stats, node table. */
 const renderViolationCard = (v) => {
   const findingType = String(v.findingType || "violation").toLowerCase();
   const findingTypeBadge = findingType === "incomplete"
@@ -387,6 +408,7 @@ const renderViolationCard = (v) => {
   </article>`;
 };
 
+/** Subsection inside a severity block (violations vs incomplete/manual-review). */
 const renderSeverityBucket = (title, cards = [], kind = "issues") => {
   if (!Array.isArray(cards) || cards.length === 0) return "";
   const cssClass = kind === "incomplete" ? "sev-subsection sev-subsection-incomplete" : "sev-subsection";
@@ -396,6 +418,7 @@ const renderSeverityBucket = (title, cards = [], kind = "issues") => {
   </section>`;
 };
 
+/** Lay out technical metric keys in a fixed-width grid (N cells per table row). */
 const chunkIntoRows = (items = [], rowSize = 3) => {
   const rows = [];
   for (let i = 0; i < items.length; i += rowSize) {
@@ -404,6 +427,10 @@ const chunkIntoRows = (items = [], rowSize = 3) => {
   return rows;
 };
 
+/**
+ * When summary JSON lacks duplicate counters, derive approximate counts from `repeatedFromEarlierReport`
+ * so technical metrics still explain cross-report noise.
+ */
 const buildFallbackDuplicateStats = (groupedViolations = []) => {
   const duplicateGroupedViolationKeys = new Set();
   const duplicateNodeKeys = new Set();
@@ -427,10 +454,13 @@ const buildFallbackDuplicateStats = (groupedViolations = []) => {
   };
 };
 
+// --- Main template: assemble identity, analysis options, metrics, severity navigation, findings, footer ---
 /**
+ * Build the full standalone HTML document string for one report object.
  * @param {object} report
  */
 const renderLiveA11yReportHtml = (report) => {
+  // Pull normalized slices off the JSON payload (counts, grouped violations, monitor analysis mirrors).
   const counts = report.counts || {};
   const artifact = report.reportArtifact || {};
   const includeIncompleteInReport = report?.reportOptions?.includeIncompleteInReport === true;
@@ -475,6 +505,8 @@ const renderLiveA11yReportHtml = (report) => {
     : `${testInSuiteLabel}${checkpointSuffix}`;
   const duplicateStats = buildFallbackDuplicateStats(violations);
   const reportEmissionInSpec = Number(artifact.reportEmissionInSpec || 0);
+
+  // If Node reporter did not attach `report.summary`, synthesize identity + technical metrics + tooltips.
   const fallbackSummary = {
     identity: {
       reportId: artifact.reportId || "—",
@@ -601,7 +633,10 @@ const renderLiveA11yReportHtml = (report) => {
       },
     },
   };
+
   const summary = report.summary || fallbackSummary;
+
+  // Validation badge + “Report identity” table (spec, test, filenames, timestamp).
   const validationStatusRaw = String(
     summary.identity?.validationStatus || report?.validation?.status || "—"
   ).toUpperCase();
@@ -630,6 +665,8 @@ const renderLiveA11yReportHtml = (report) => {
       }
     )
     .join("");
+
+  // Technical metrics as a 3-column grid; first rows visible, remainder behind `<details>`.
   const technicalOrder = Array.isArray(summary.technicalOrder) && summary.technicalOrder.length > 0
     ? summary.technicalOrder
     : fallbackSummary.technicalOrder;
@@ -669,6 +706,7 @@ const renderLiveA11yReportHtml = (report) => {
   const technicalRowsExpandedRemainder = technicalRowHtml.slice(technicalPreviewRowCount).join("");
   const technicalTotalRows = technicalRowHtml.length;
 
+  // Top-of-page severity pills: deep-link into each severity section with issue/incomplete counts.
   const sevPills = severityTotalsOrder
     .map((s) => {
       const sevEntry = bySevDisposition?.[s] || {};
@@ -689,6 +727,7 @@ const renderLiveA11yReportHtml = (report) => {
     })
     .join(" ");
 
+  // Static recap of how axe was configured for this run (tags, fail vs warn impacts, incomplete flag).
   const analysisOptions = `
       <h2>Analysis Options</h2>
       <div class="analysis-option-row">
@@ -712,6 +751,7 @@ const renderLiveA11yReportHtml = (report) => {
         <span class="analysis-option-values">${report?.reportOptions?.includeIncompleteInReport ? "Yes" : "No (default)"}</span>
       </div>`;
 
+  // Main findings body: one block per axe severity, splitting violation vs incomplete cards when enabled.
   const bySeveritySections = sevOrder
     .map((sev) => {
       const list = violations.filter((v) => String(v.impact || "").toLowerCase() === sev);
@@ -778,6 +818,7 @@ const renderLiveA11yReportHtml = (report) => {
     })
     .join("");
 
+  // Monitor pipeline errors (not axe violations) + disclaimer footnote lines from JSON or package default.
   const errors = Array.isArray(report.errors) ? report.errors : [];
   const footnoteLines = Array.isArray(report.footnote?.lines)
     ? report.footnote.lines
@@ -793,6 +834,7 @@ const renderLiveA11yReportHtml = (report) => {
         )
         .join("")}</ul></section>`;
 
+  // Full document shell. Styles are inlined so the file is portable (email, file://, CI artifacts).
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1440,7 +1482,10 @@ const renderLiveA11yReportHtml = (report) => {
 </html>`;
 };
 
+// --- Public API (reporter task + tests may reuse `escapeHtml`) ---
 module.exports = {
+  A11Y_REPORT_DISCLAIMER,
+  A11Y_REPORT_DISCLAIMER_LINES,
   renderLiveA11yReportHtml,
   escapeHtml,
 };

@@ -1,13 +1,23 @@
+#!/usr/bin/env node
 /**
- * I/O for live-a11y reporting: filesystem, HTML rendering, terminal logging, Cypress tasks.
+ * I/O for live-a11y reporting: filesystem, HTML artifacts, terminal logging, Cypress tasks.
+ *
+ * CLI — write sibling `.html` from a saved JSON report:
+ *   node src/a11y-reporter-io.js path/to/report.json
  */
 
 const fs = require("fs");
 const path = require("path");
-const { A11Y_REPORT_DISCLAIMER, A11Y_REPORT_DISCLAIMER_LINES } = require("./a11y-disclaimer");
-const { renderLiveA11yReportHtml } = require("./a11y-html-template");
-const core = require("./a11y-reporter-core");
+const {
+  A11Y_REPORT_DISCLAIMER,
+  A11Y_REPORT_DISCLAIMER_LINES,
+  renderLiveA11yReportHtml,
+} = require("./a11y-html-template");
+const core = require("./a11y-reporter");
 
+/* ---------------------------------------------------------------------------
+ * Persist report payloads: JSON for machines/CI, sibling HTML for humans (same basename).
+ * --------------------------------------------------------------------------- */
 const writeJson = (outputPath, payload) => {
   const absolutePath = path.resolve(outputPath);
   fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
@@ -31,6 +41,23 @@ const writeLiveA11yHtmlReport = (jsonOutputPath, payload) => {
 };
 
 /**
+ * Read a saved live-a11y JSON report and write the sibling `.html` (same basename).
+ * @param {string} jsonPath
+ * @returns {string} absolute path to the HTML file
+ */
+const writeLiveA11yHtmlFromJsonFile = (jsonPath) => {
+  const abs = path.resolve(jsonPath);
+  if (!fs.existsSync(abs)) {
+    throw new Error(`File not found: ${abs}`);
+  }
+  const report = JSON.parse(fs.readFileSync(abs, "utf8"));
+  return writeLiveA11yHtmlReport(abs, report);
+};
+
+/* ---------------------------------------------------------------------------
+ * Shapes `reportArtifact` on the payload so HTML/JSON consumers know paths + test metadata.
+ * --------------------------------------------------------------------------- */
+/**
  * @param {string} outputPath
  * @param {string} absolutePath
  * @param {Record<string, string | undefined> | undefined} reportMeta
@@ -45,6 +72,10 @@ const attachReportArtifact = (outputPath, absolutePath, reportMeta) => {
   };
 };
 
+/* ---------------------------------------------------------------------------
+ * CI/local visibility: prints validation outcome, counts, paths, and grouped violations
+ * without opening the HTML report (complements core.formatTerminalSeverityLine).
+ * --------------------------------------------------------------------------- */
 const logLiveA11yReportToTerminal = (payload, validationResult, { savedTo, savedHtmlTo } = {}) => {
   const artifact = payload?.reportArtifact || {};
   const counts = payload?.counts || {};
@@ -102,6 +133,10 @@ const logLiveA11yReportToTerminal = (payload, validationResult, { savedTo, saved
   console.log(terminalSeparator);
 };
 
+/* ---------------------------------------------------------------------------
+ * Cypress plugin hook: `liveA11y:buildReport` task builds the report in Node, optionally
+ * writes artifacts, logs to terminal, and fails the task when validation fails (unless deferred).
+ * --------------------------------------------------------------------------- */
 const registerLiveA11yReporterTasks = (on, config = {}) => {
   const defaultOutputPath = core.resolveDefaultAccessibilityReportPath(config?.accessibilityFolder);
   on("task", {
@@ -122,6 +157,7 @@ const registerLiveA11yReporterTasks = (on, config = {}) => {
       const validationResult = core.validateLiveA11yReport(report, validation);
       const absolutePath = path.resolve(outputPath);
       const validationStatus = core.resolveValidationStatus(report.counts, validationResult);
+      /* Payload mirrors disk JSON/HTML: counts + grouped findings + validation + artifact paths. */
       const payload = {
         ...report,
         validation: {
@@ -139,6 +175,7 @@ const registerLiveA11yReporterTasks = (on, config = {}) => {
       let savedTo;
       let savedHtmlTo;
       let htmlReportRelative;
+      /* In-memory-only mode skips writes (e.g. tests) but still logs and validates. */
       if (generateArtifacts !== false) {
         savedTo = writeJson(outputPath, payload);
         savedHtmlTo = writeLiveA11yHtmlReport(outputPath, payload);
@@ -149,6 +186,7 @@ const registerLiveA11yReporterTasks = (on, config = {}) => {
 
       logLiveA11yReportToTerminal(payload, validationResult, { savedTo, savedHtmlTo });
 
+      /* Defer when the runner will assert separately (e.g. custom Cypress flow). */
       if (!validationResult.valid && !deferValidationFailure) {
         throw new Error(
           `Live a11y validation failed:\n- ${validationResult.errors.join("\n- ")}`
@@ -166,6 +204,26 @@ const registerLiveA11yReporterTasks = (on, config = {}) => {
   });
 };
 
+/* ---------------------------------------------------------------------------
+ * CLI entry: regenerate HTML from an existing JSON report (e.g. shareable artifact).
+ * --------------------------------------------------------------------------- */
+if (require.main === module) {
+  const jsonPath = process.argv[2];
+  if (!jsonPath) {
+    console.error("Usage: node src/a11y-reporter-io.js <report.json>");
+    process.exit(1);
+  }
+  try {
+    const outPath = writeLiveA11yHtmlFromJsonFile(jsonPath);
+    console.log("Wrote", outPath);
+  } catch (err) {
+    console.error(err.message || err);
+    process.exit(1);
+  }
+}
+
+/* Public API for Cypress setup; CLI-only helper exported for tests or tooling. */
 module.exports = {
   registerLiveA11yReporterTasks,
+  writeLiveA11yHtmlFromJsonFile,
 };

@@ -1,5 +1,16 @@
+/**
+ * Live accessibility monitor for the AUT window: discovers “scan roots” (dialogs,
+ * live regions, interactive clusters), waits for UI to settle, runs axe serially,
+ * and accumulates results in a shared store for Cypress/reporting. Severity filters
+ * (included/warn impacts) are applied after axe runs so behavior stays deterministic.
+ */
 import { AXE_IMPACT_ORDER } from './a11y-shared-constants.js';
 
+/* ---------------------------------------------------------------------------
+ * Default CSS selector groups used to find semantic overlays (dialogs, popovers,
+ * aria-live), open/state-driven surfaces, and interactive elements. Tunable via
+ * installLiveA11yMonitor options so apps can extend roots without editing core.
+ * --------------------------------------------------------------------------- */
 export const DEFAULT_SEMANTIC_ROOT_SELECTOR = [
   '[popover]',
   'dialog[open]',
@@ -45,6 +56,12 @@ export const DEFAULT_INTERACTIVE_SELECTOR = [
   '[contenteditable="true"]',
 ].join(',');
 
+/* ---------------------------------------------------------------------------
+ * Store factory and axe-option normalization. Reads plugin-level fields
+ * (includedImpacts, impactLevels, onlyWarnImpacts, runOnly) that axe-core does
+ * not interpret the same way; we strip them from run options and filter results
+ * in JS so pass/fail and reporting stay consistent across runs.
+ * --------------------------------------------------------------------------- */
 function createDefaultStore() {
   return {
     initial: null,
@@ -144,6 +161,11 @@ function normalizeA11yRunOptions(axeOptions = {}) {
   return normalized;
 }
 
+/* ---------------------------------------------------------------------------
+ * Axe result shaping: empty template, merge partial runs, prefix iframe node
+ * targets for attribution, and filter violations/incomplete by configured impact.
+ * Passes/inapplicable are left unfiltered when filtering by impact (plugin policy).
+ * --------------------------------------------------------------------------- */
 function createEmptyA11yResults() {
   return {
     violations: [],
@@ -208,6 +230,11 @@ function filterA11yResultsByImpact(results, axeOptions = {}) {
   };
 }
 
+/* ---------------------------------------------------------------------------
+ * installLiveA11yMonitor — main entry: wires MutationObserver, animation/resize
+ * hooks, optional pre-navigation full-page flush, and a serial axe queue. Returns
+ * an API (arm/disarm/stop/waitForIdle/…) and attaches win.__liveA11yMonitor.
+ * --------------------------------------------------------------------------- */
 export function installLiveA11yMonitor(win, userOptions = {}) {
   if (!win?.axe || typeof win.axe.run !== 'function') {
     throw new Error(
@@ -217,6 +244,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
 
   const doc = win.document;
 
+  /* Defaults merged with userOptions; timing/throttling tuned to balance coverage vs noise. */
   const options = {
     root: doc.documentElement,
     autoArm: false,
@@ -264,6 +292,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     sharedStore: null,
 
     ...userOptions,
+    // Deep-merge preNavigationFlush so caller can override single flags without losing defaults.
     preNavigationFlush: {
       enabled: false,
       minIntervalMs: 300,
@@ -274,6 +303,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     },
   };
 
+  /* Snapshot of configured severity/rule filters for reporters and tests. */
   const store = options.sharedStore || createDefaultStore();
 
   if (!store.meta) {
@@ -319,6 +349,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     liveRunOnlyTags: normalizeRunOnlyValuesFromA11yOptions(options.liveAxeOptions),
   };
 
+  /* Per-root WeakMap state, FIFO-ish queue Map, throttling flags, and serial axe chain. */
   const rootState = new WeakMap();
   const knownRoots = new Set();
   const queue = new Map();
@@ -340,6 +371,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
   const pendingMutationCandidates = new Set();
   let axeRunChain = Promise.resolve();
 
+  /* Activity timestamp + rAF helper for idle detection and settle loops. */
   function touch() {
     lastActivity = win.performance.now();
   }
@@ -348,6 +380,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return new Promise((resolve) => win.requestAnimationFrame(resolve));
   }
 
+  /* Shadow-aware tree walking: composed parent and closest match across shadow boundaries. */
   function isElement(node) {
     return node && node.nodeType === 1;
   }
@@ -376,6 +409,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return null;
   }
 
+  /* Lazily created per-root machine state: visibility cycle, tokens for stale work, queue flags. */
   function getRootState(root) {
     let state = rootState.get(root);
 
@@ -404,6 +438,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return id;
   }
 
+  /* Visibility walks composed ancestors (hidden, inert, display, opacity policy). */
   function isCssVisible(el) {
     if (!isElement(el) || !el.isConnected) return false;
 
@@ -436,6 +471,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     );
   }
 
+  /* Labels root for reporting priority and metadata (dialog vs tooltip vs generic). */
   function classifyRoot(root) {
     if (!root || !isElement(root)) return 'unknown';
 
@@ -468,6 +504,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return 'generic';
   }
 
+  /* Higher priority roots dequeue first when the live scan queue is constrained. */
   function rootPriority(root) {
     switch (classifyRoot(root)) {
       case 'dialog':
@@ -493,10 +530,12 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  /* Resolve which subtree to scan: semantic/state/convention roots, forms, then interactive. */
   function findScanRoot(el) {
     return findScanRootWithStrategy(el).root;
   }
 
+  /* Limited ancestor walk from mutation target when semantic selectors miss (dynamic islands). */
   function findMutationDrivenRoot(el) {
     if (!isElement(el)) return null;
 
@@ -521,6 +560,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return null;
   }
 
+  /* Ordered resolution with named strategy for telemetry; optional mutation fallback path. */
   function findScanRootWithStrategy(el, { allowMutationFallback = false } = {}) {
     if (!isElement(el)) return { root: null, strategy: null };
     if (el.matches(options.ignoreSelector)) return { root: null, strategy: null };
@@ -566,6 +606,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return { root: null, strategy: null };
   }
 
+  /* Gate: connected, visible, not ignored, and eligible semantic/state/interactive root. */
   function shouldQueueForA11y(root) {
     if (!root || !isElement(root)) return false;
     if (root.matches(options.ignoreSelector)) return false;
@@ -587,6 +628,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return hasInteractiveContent(root);
   }
 
+  /* Cheap layout/style fingerprint so waitUntilStable can detect steady frames. */
   function signature(root) {
     const rect = root.getBoundingClientRect();
     const cs = win.getComputedStyle(root);
@@ -602,6 +644,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     ].join('|');
   }
 
+  /* Drop queued work and bump cycle/token when root hides or disconnects. */
   function invalidateRoot(root) {
     const state = getRootState(root);
 
@@ -623,6 +666,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     touch();
   }
 
+  /* Wait until root stays visible and geometry/style unchanged for N frames or max time. */
   async function waitUntilStable(root, token) {
     const startedAt = win.performance.now();
     let firstVisibleAt = null;
@@ -661,6 +705,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return false;
   }
 
+  /* Ordered queue view: priority desc, then enqueue order for fairness. */
   function queueSnapshot() {
     return [...queue.values()].sort((a, b) => {
       if (b.priority !== a.priority) return b.priority - a.priority;
@@ -668,6 +713,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     });
   }
 
+  /* Cap queue length under load; lowest-priority pending roots drop first (meta.dropped). */
   function shrinkQueueIfNeeded() {
     if (queue.size <= options.maxQueueSize) return;
 
@@ -686,6 +732,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  /* Persist only what live reporting needs (violations + incomplete). */
   function compactA11yResults(results) {
     return {
       violations: results?.violations || [],
@@ -693,6 +740,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     };
   }
 
+  /* Human-readable iframe discriminator for prefixed axe node targets in reports. */
   function iframeLocator(iframeEl) {
     const id = iframeEl.getAttribute('id');
     if (id) return `iframe#${id}`;
@@ -715,6 +763,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return [];
   }
 
+  /* Same-origin iframes: eval cached axe source into frame, run separately, merge with prefix. */
   function ensureA11yInFrame(frameWin) {
     if (frameWin?.axe && typeof frameWin.axe.run === 'function') {
       return true;
@@ -774,6 +823,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return merged;
   }
 
+  /* Serialize axe.run across targets so concurrent DOM scans don’t fight or duplicate work. */
   async function runA11ySerial(target, axeOptions) {
     const run = axeRunChain.then(async () => {
       const rawResults = await win.axe.run(target, normalizeA11yRunOptions(axeOptions));
@@ -786,6 +836,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return run;
   }
 
+  /* Add root to live queue with priority; pumpQueue drains asynchronously. */
   function enqueueRoot(root, reason, token) {
     const state = getRootState(root);
 
@@ -808,6 +859,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     pumpQueue();
   }
 
+  /* Single active runner: dequeue, settle guards, run axe, append store.live or store.errors. */
   async function pumpQueue() {
     if (queueRunnerActive || stopped || !armed) return;
 
@@ -879,6 +931,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  /* After DOM churn: wait for stable visible root, then enqueue if still eligible. */
   function settleAndMaybeQueue(root, reason) {
     const state = getRootState(root);
 
@@ -936,6 +989,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
       });
   }
 
+  /* Scan DOM for candidates and dedupe resolved scan roots (used by rescan). */
   function collectCurrentRoots() {
     const roots = new Map();
     const selector = [
@@ -957,6 +1011,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return roots;
   }
 
+  /* Reconcile knownRoots with DOM; optionally full-page axe when nothing actionable queued. */
   function rescan(reason = 'mutation') {
     if (stopped || !armed) return;
 
@@ -1008,6 +1063,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  /* Safety net when targeted roots miss dynamic content; throttled document-level scan. */
   async function maybeRunFallbackFullPageScan(reason) {
     if (stopped || !armed || fallbackRunning) return;
     const now = win.performance.now();
@@ -1048,6 +1104,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  /* Capture a11y state on likely navigation (click link/submit, pagehide) before unload. */
   function queuePreNavigationFlush(reason = 'navigation') {
     if (stopped || !armed || !options.preNavigationFlush?.enabled) return;
     if (preNavigationFlushRunning) return;
@@ -1092,6 +1149,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
       });
   }
 
+  /* Heuristic to avoid flushing on every click; focuses on real navigations. */
   function isLikelyNavigationClickTarget(target) {
     if (!target) return false;
     const base = isElement(target) ? target : target.parentElement;
@@ -1126,6 +1184,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return false;
   }
 
+  /* Collect mutation targets for a single rAF batch (elements or text parent). */
   function queueMutationCandidate(node) {
     if (!node) return;
     if (isElement(node)) {
@@ -1137,6 +1196,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  /* Debounce mutation-driven root discovery to one animation frame. */
   function scheduleMutationRescan() {
     if (stopped || !armed || mutationRescanScheduled) return;
     mutationRescanScheduled = true;
@@ -1147,6 +1207,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     });
   }
 
+  /* Narrow mutation-driven work: find scan roots with mutation fallback, queue or fallback scan. */
   function processMutationCandidates() {
     if (stopped || !armed) {
       pendingMutationCandidates.clear();
@@ -1189,6 +1250,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
+  /* Coalesce full-tree rescans to one frame (pairs with MutationObserver batching). */
   function scheduleRescan(reason = 'mutation') {
     if (stopped || !armed || fullRescanScheduled) return;
 
@@ -1200,6 +1262,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     });
   }
 
+  /* DOM mutations → candidate queue + full rescan schedule (when armed). */
   const mutationObserver = new win.MutationObserver((records) => {
     if (!armed) return;
 
@@ -1223,6 +1286,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     characterData: true,
   });
 
+  /* Transitions, animations, resize, bfcache restore — reschedule root discovery. */
   const eventHandlers = [
     ['transitionrun', () => scheduleRescan('transitionrun')],
     ['transitionend', () => scheduleRescan('transitionend')],
@@ -1237,6 +1301,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     win.addEventListener(name, handler, true);
   });
 
+  /* Optional full-document flush around navigation intents (feature-flagged). */
   const preNavigationHandlers = [
     [
       'click',
@@ -1268,9 +1333,11 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     });
   }
 
+  /* Captures lazy-loaded subtree changes (images, iframes, etc.). */
   const loadHandler = () => scheduleRescan('resource-load');
   doc.addEventListener('load', loadHandler, true);
 
+  /* Baseline snapshot for diffing live findings; stored separately from live array. */
   async function runInitialFullPageScan(initialAxeOptions = options.initialAxeOptions) {
     const rawResults = await win.axe.run(doc, normalizeA11yRunOptions(initialAxeOptions));
     const filtered = filterA11yResultsByImpact(rawResults, initialAxeOptions);
@@ -1282,6 +1349,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return results;
   }
 
+  /* Enable observers/queue processing; optionally triggers immediate rescan of current DOM. */
   function arm({ scanCurrent = true } = {}) {
     armed = true;
     touch();
@@ -1302,6 +1370,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     touch();
   }
 
+  /* Cypress-friendly barrier: resolves when queue/settles quiet for quietMs or timeout. */
   async function waitForIdle({
     quietMs = options.quietMs,
     timeoutMs = options.waitForIdleTimeoutMs,
@@ -1331,6 +1400,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     return store;
   }
 
+  /* Tear down listeners and observer; stop all future scans. */
   function stop() {
     stopped = true;
     disarm();
@@ -1345,6 +1415,7 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     });
   }
 
+  /* Public surface for Cypress bridge and debugging. */
   const api = {
     store,
     arm,
