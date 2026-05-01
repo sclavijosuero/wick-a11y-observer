@@ -508,6 +508,12 @@ The same computed validation status (`PASS` / `FAIL`) is also persisted into the
 
 ## Change Log
 
+### `1.0.0-beta.2`
+
+- Replaces `Cypress.env()` usage with `cy.env()` and `Cypress.expose()` for more reliable env access in the Cypress chain.
+- Improves how violations appear in the Cypress command log and cleans up related logging noise.
+- Refactors the Node reporter and reorganizes project files with clearer inline documentation.
+
 ### `1.0.0-beta.1`
 
 - Fixes first-test live monitor lifecycle reliability across navigation, improves checkpoint log clarity (A/B labeling), and reduces checkpoint-test noise by skipping redundant auto afterEach report logs while preserving strict end-of-suite failure reporting.
