@@ -357,6 +357,7 @@ const toFindingDetails = (results, findingType = "violation") => {
       any: node.any || [],
       all: node.all || [],
       none: node.none || [],
+      visualSnapshot: node.visualSnapshot,
     })),
     rawViolation: violation,
   }));
@@ -384,6 +385,7 @@ const toFindingDetails = (results, findingType = "violation") => {
         any: node.any || [],
         all: node.all || [],
         none: node.none || [],
+        visualSnapshot: node.visualSnapshot,
       })),
       rawViolation: violation,
     }));
@@ -469,6 +471,9 @@ const groupViolations = (violationDetails) => {
       } else {
         if (!currentNode.phases.includes(violation.phase)) {
           currentNode.phases.push(violation.phase);
+        }
+        if (!currentNode.visualSnapshot && node.visualSnapshot) {
+          currentNode.visualSnapshot = node.visualSnapshot;
         }
         if (!currentNode.sourceLabels) {
           currentNode.sourceLabels = currentNode.sources.map((s) => s);
@@ -685,6 +690,18 @@ const buildLiveA11yReport = (results, options = {}) => {
   return {
     generatedAt: new Date().toISOString(),
     meta: results?.meta || {},
+    initialPageVisual: results?.initialPageVisual ?? null,
+    initialPageVisuals:
+      Array.isArray(results?.initialPageVisuals) && results.initialPageVisuals.length > 0
+        ? results.initialPageVisuals
+        : results?.initialPageVisual?.r && !results.initialPageVisual.err
+          ? [
+            {
+              pageUrl: results.initialPageUrl || results.initialPageVisual.url || "",
+              ...results.initialPageVisual,
+            },
+          ]
+          : [],
     errors: results?.errors || [],
     counts: {
       initialScans: results?.initial ? 1 : 0,

@@ -4,6 +4,8 @@ import { installLiveA11yMonitor } from './a11y-monitor';
 export function createLiveA11yStore() {
   return {
     initial: null,
+    initialPageVisual: null,
+    initialPageVisuals: [],
     live: [],
     errors: [],
     meta: {

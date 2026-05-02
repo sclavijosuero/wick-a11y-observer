@@ -376,6 +376,13 @@ const clearPriorLiveEntriesOnStore = (store) => {
   store.live = [];
 };
 
+/** Checkpoint scans: drop accumulated multi-nav page overviews so each checkpoint report only shows that scan’s URL(s). */
+const clearInitialPageVisualsOnStore = (store) => {
+  if (!store || typeof store !== 'object') return;
+  store.initialPageVisual = null;
+  store.initialPageVisuals = [];
+};
+
 const setScanTypeOnStore = (store, scanType = 'live') => {
   if (!store || typeof store !== 'object') return;
   if (!store.meta || typeof store.meta !== 'object') {
@@ -1283,6 +1290,7 @@ const resolveLiveA11yMonitorInstallOptions = (monitorOptions = {}) => {
     initialAxeOptions = {},
     liveAxeOptions = {},
     observerOptions = {},
+    visualSnapshots,
   } = monitorOptions;
 
   // Initial vs live axe configs merge independently against the same defaults (tags, impacts, rules).
@@ -1297,6 +1305,7 @@ const resolveLiveA11yMonitorInstallOptions = (monitorOptions = {}) => {
 
   return {
     ...observerOptions,
+    ...(visualSnapshots !== undefined ? { visualSnapshots } : {}),
     initialAxeOptions: computedInitialOptions,
     liveAxeOptions: computedLiveOptions,
   };
@@ -1588,6 +1597,7 @@ export default {
   clearLiveA11yAutoReportRuntimeOptions,
   clearLiveA11yAutoSetupRuntimeOptions,
   clearPriorLiveEntriesOnStore,
+  clearInitialPageVisualsOnStore,
   ensureLiveA11yAutoNavigationHook,
   ensureLiveA11yAutoVisitCommandOverwrite,
   getActiveLiveA11yStore,

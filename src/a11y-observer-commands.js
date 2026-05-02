@@ -71,6 +71,7 @@ Cypress.Commands.add(
         }
         const monitorStore = win.__liveA11yMonitor.store;
         a11yLive.clearPriorLiveEntriesOnStore(monitorStore);
+        a11yLive.clearInitialPageVisualsOnStore(monitorStore);
         a11yLive.syncCheckpointScanPolicyOnStore(monitorStore, axeOptions || {});
         await win.__liveA11yMonitor.runInitialFullPageScan(axeOptions);
       });

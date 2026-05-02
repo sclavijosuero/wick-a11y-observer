@@ -28,6 +28,565 @@ const escapeHtml = (value) => {
     .replace(/"/g, "&quot;");
 };
 
+/** Safe JSON embedding inside `<script type="application/json">` (standalone HTML). */
+const escapeJsonForInlineScript = (value) =>
+  JSON.stringify(value ?? null)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+
+const renderVisualJsonScript = (domId, snapshotPayload) => {
+  const safeId = escapeHtml(domId);
+  const json = escapeJsonForInlineScript(snapshotPayload);
+  return `<script type="application/json" id="${safeId}" data-a11y-visual="1">${json}</script>`;
+};
+
+/** Rule metadata for lightbox (DOM APIs apply escaping when built client-side). */
+const renderRuleMetaJsonScript = (domId, violation) => {
+  const vid = escapeHtml(domId);
+  const meta = {
+    id: violation?.id ? String(violation.id) : "",
+    helpUrl: violation?.helpUrl ? String(violation.helpUrl) : "",
+    help: violation?.help ? String(violation.help) : "",
+    description: violation?.description ? String(violation.description) : "",
+    tags: Array.isArray(violation?.tags) ? violation.tags.map((t) => String(t)) : [],
+  };
+  return `<script type="application/json" id="${vid}-rule-meta" data-a11y-rule-meta="1">${escapeJsonForInlineScript(
+    meta
+  )}</script>`;
+};
+
+const formatNodeTargetForLightboxContext = (target) => {
+  if (target == null) return "";
+  if (Array.isArray(target)) {
+    return target.map((t) => String(t ?? "").trim()).filter(Boolean).join(" ");
+  }
+  return String(target).trim();
+};
+
+/** Selector + page URL for lightbox chrome (per violation row snapshot). */
+const renderLightboxContextScript = (domId, node) => {
+  const vid = escapeHtml(domId);
+  const payload = {
+    target: formatNodeTargetForLightboxContext(node?.target),
+    pageUrl: node?.pageUrl ? String(node.pageUrl) : "",
+  };
+  return `<script type="application/json" id="${vid}-lightbox-context" data-a11y-lightbox-context="1">${escapeJsonForInlineScript(
+    payload
+  )}</script>`;
+};
+
+/**
+ * Payload shape matches `a11y-visual-snapshot.js` (`r` = compact DOM tree).
+ * @param {string} domId HTML id for JSON script + host lookup
+ * @param {object} snapshotPayload
+ */
+const renderVisualSnapshotJsonAndHost = (domId, snapshotPayload) => {
+  const safeId = escapeHtml(domId);
+  return `${renderVisualJsonScript(domId, snapshotPayload)}
+<div class="a11y-visual-host" data-a11y-visual-host="${safeId}" role="img" aria-label="Approximate DOM snapshot preview"></div>`;
+};
+
+/** Thumbnail + click-to-zoom for per-violation snapshots (script lives outside the button). */
+const renderNodeVisualThumb = (domId, snapshotPayload, violationForLightbox = null, nodeDetail = null) => {
+  const safeId = escapeHtml(domId);
+  const metaBlock =
+    violationForLightbox &&
+    snapshotPayload &&
+    snapshotPayload.r &&
+    !snapshotPayload.err
+      ? renderRuleMetaJsonScript(domId, violationForLightbox)
+      : "";
+  const contextBlock =
+    nodeDetail &&
+    violationForLightbox &&
+    snapshotPayload &&
+    snapshotPayload.r &&
+    !snapshotPayload.err
+      ? renderLightboxContextScript(domId, nodeDetail)
+      : "";
+  return `${renderVisualJsonScript(domId, snapshotPayload)}${metaBlock}${contextBlock}
+<div class="a11y-visual-thumb-wrap">
+<button type="button" class="a11y-visual-thumb-btn" data-a11y-zoom="${safeId}" aria-label="Enlarge DOM snapshot for this violation">
+  <span class="a11y-visual-thumb-viewport">
+    <span class="a11y-visual-host a11y-visual-host--thumb" data-a11y-visual-host="${safeId}" role="img" aria-hidden="true"></span>
+  </span>
+  <span class="a11y-visual-thumb-caption">Click to enlarge · full capture</span>
+</button>
+</div>`;
+};
+
+const renderVisualLightboxDialog = () => `<dialog id="a11y-visual-lightbox" class="a11y-visual-lightbox" aria-label="Full DOM snapshot and rule documentation">
+  <div class="a11y-visual-lightbox-toolbar">
+    <div class="a11y-visual-lightbox-context" id="a11y-visual-lightbox-context" hidden></div>
+    <button type="button" class="a11y-visual-lightbox-close" data-a11y-lightbox-close="1" onclick="(function(){var d=document.getElementById('a11y-visual-lightbox');if(d)d.close();document.documentElement.style.overflow='';})();">Close</button>
+  </div>
+  <div class="a11y-visual-lightbox-scroll">
+    <div class="a11y-visual-lightbox-host"></div>
+  </div>
+</dialog>`;
+
+const renderVisualBootScript = () => `<script>
+(function () {
+  var SEV_COLOR = {
+    critical: "#f85149",
+    serious: "#db6d28",
+    moderate: "#e3b341",
+    minor: "#79c0ff",
+    none: "#8b949e",
+    incomplete: "#c4b5fd",
+  };
+  function walk(n, doc) {
+    if (!n) return null;
+    if (Object.prototype.hasOwnProperty.call(n, "x") && n.x != null && !n.t) {
+      return doc.createTextNode(String(n.x));
+    }
+    var el = doc.createElement(n.t || "div");
+    var parts = [];
+    if (n.s) parts.push(n.s);
+    if (n.f) {
+      var fc = SEV_COLOR[String(n.f).toLowerCase()] || "#8b949e";
+      parts.push(
+        "box-sizing:border-box;outline:2px dashed " +
+          fc +
+          ";outline-offset:2px;background-color:transparent"
+      );
+    }
+    if (parts.length) el.setAttribute("style", parts.join(";"));
+    if (n.f) el.setAttribute("data-a11y-focal", "1");
+    if (n.a && typeof n.a === "object") {
+      Object.keys(n.a).forEach(function (k) {
+        el.setAttribute(k, n.a[k]);
+      });
+    }
+    (n.c || []).forEach(function (ch) {
+      var child = walk(ch, doc);
+      if (child) el.appendChild(child);
+    });
+    return el;
+  }
+  function attachHighlights(inner, data) {
+    if (!inner || !data.hl || !data.hl.length) return;
+    inner.style.position = "relative";
+    var overlay = document.createElement("div");
+    overlay.className = "a11y-violation-highlight-overlay";
+    overlay.setAttribute("aria-hidden", "true");
+    overlay.style.cssText =
+      "position:absolute;left:0;top:0;width:100%;min-width:100%;min-height:100%;pointer-events:none;box-sizing:border-box;";
+    data.hl.forEach(function (h) {
+      var nx = Number(h.nx);
+      var ny = Number(h.ny);
+      var nw = Number(h.nw);
+      var nh = Number(h.nh);
+      if (![nx, ny, nw, nh].every(function (v) { return typeof v === "number" && isFinite(v); })) {
+        return;
+      }
+      var box = document.createElement("div");
+      var c = SEV_COLOR[h.i] || "#8b949e";
+      box.style.cssText =
+        "position:absolute;left:" +
+        nx * 100 +
+        "%;top:" +
+        ny * 100 +
+        "%;width:" +
+        nw * 100 +
+        "%;height:" +
+        nh * 100 +
+        "%;border:2px dashed " +
+        c +
+        ";box-sizing:border-box;background:transparent;";
+      overlay.appendChild(box);
+    });
+    inner.appendChild(overlay);
+    requestAnimationFrame(function () {
+      try {
+        overlay.style.height = inner.scrollHeight + "px";
+      } catch (e2) {}
+    });
+  }
+  function renderIntoHost(host, data) {
+    host.innerHTML = "";
+    var rootNode = data.r;
+    if (!rootNode) {
+      host.innerHTML = '<span class="subtle">No preview data</span>';
+      return null;
+    }
+    var inner = document.createElement("div");
+    inner.className = "a11y-visual-inner";
+    inner.style.position = "relative";
+    inner.style.boxSizing = "border-box";
+    if (data.kind === "element" && data.contextLayout) {
+      var cw = Number(data.contextLayout.w);
+      var ch = Number(data.contextLayout.h);
+      if (cw > 0) {
+        inner.style.minWidth = cw + "px";
+        inner.style.display = "block";
+      }
+      if (ch > 0) {
+        inner.style.minHeight = ch + "px";
+        inner.style.display = "block";
+      }
+    }
+    var built = walk(rootNode, document);
+    if (built) inner.appendChild(built);
+    host.appendChild(inner);
+    attachHighlights(inner, data);
+    return inner;
+  }
+  function fitThumbViewport(vp) {
+    var host = vp.querySelector(".a11y-visual-host");
+    if (!host) return;
+    var inner = host.querySelector(".a11y-visual-inner");
+    if (!inner) return;
+    inner.style.transform = "";
+    inner.style.transformOrigin = "0 0";
+    var pad = 10;
+    var availW = Math.max(1, vp.clientWidth - pad * 2);
+    var availH = Math.max(1, vp.clientHeight - pad * 2);
+    var vpR = vp.getBoundingClientRect();
+    var ir = inner.getBoundingClientRect();
+    var focal = inner.querySelector("[data-a11y-focal]");
+    if (focal && ir.width >= 1 && ir.height >= 1) {
+      var fr = focal.getBoundingClientRect();
+      var fx = fr.left - ir.left;
+      var fy = fr.top - ir.top;
+      var fw = Math.max(fr.width, focal.offsetWidth || 0, 8);
+      var fh = Math.max(fr.height, focal.offsetHeight || 0, 8);
+      var maxSide = Math.max(fw, fh);
+      var sidePadFrac = maxSide < 56 ? 0.65 : 0.25;
+      var boxW = Math.max(fw * (1 + 2 * sidePadFrac), 48);
+      var boxH = Math.max(fh * (1 + 2 * sidePadFrac), 48);
+      var cx = fx + fw / 2;
+      var cy = fy + fh / 2;
+      var s = Math.min(availW / boxW, availH / boxH);
+      if (!(s > 0) || !isFinite(s)) s = 1;
+      var vpCx = vpR.width / 2;
+      var vpCy = vpR.height / 2;
+      var innerLeftInVp = ir.left - vpR.left;
+      var innerTopInVp = ir.top - vpR.top;
+      var tx = vpCx - (innerLeftInVp + cx * s);
+      var ty = vpCy - (innerTopInVp + cy * s);
+      inner.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + s + ")";
+    } else {
+      var iw = Math.max(inner.scrollWidth, 1);
+      var ih = Math.max(inner.scrollHeight, 1);
+      var s2 = Math.min(availW / iw, availH / ih, 1);
+      inner.style.transformOrigin = "center center";
+      inner.style.transform = "scale(" + s2 + ")";
+    }
+  }
+  function mount(scriptId) {
+    var script = document.getElementById(scriptId);
+    if (!script) return;
+    var hosts = document.querySelectorAll('[data-a11y-visual-host="' + scriptId + '"]');
+    if (!hosts.length) return;
+    var data = {};
+    try {
+      data = JSON.parse(script.textContent || "{}");
+    } catch (e) {
+      hosts.forEach(function (host) {
+        host.textContent = "Preview JSON parse error";
+      });
+      return;
+    }
+    if (!data.r) {
+      hosts.forEach(function (host) {
+        host.innerHTML = '<span class="subtle">No preview data</span>';
+      });
+      return;
+    }
+    hosts.forEach(function (host) {
+      renderIntoHost(host, data);
+      var vp = host.closest(".a11y-visual-thumb-viewport");
+      if (vp) {
+        requestAnimationFrame(function () {
+          fitThumbViewport(vp);
+          requestAnimationFrame(function () {
+            fitThumbViewport(vp);
+          });
+        });
+      }
+    });
+  }
+  function buildLightboxRulePanel(meta) {
+    var wrap = document.createElement("div");
+    wrap.className = "a11y-visual-lightbox-rule";
+    if (!meta || (!meta.id && !meta.help && !meta.helpUrl && !(meta.tags && meta.tags.length))) {
+      return wrap;
+    }
+    var det = document.createElement("details");
+    det.className = "a11y-lightbox-rule-details";
+    var sum = document.createElement("summary");
+    sum.className = "a11y-lightbox-rule-summary";
+    var lab = document.createElement("span");
+    lab.className = "a11y-lightbox-rule-summary-lead";
+    lab.textContent = "Full rule info";
+    sum.appendChild(lab);
+    sum.appendChild(document.createTextNode(" "));
+    var rid = document.createElement("code");
+    rid.className = "a11y-lightbox-rule-id-inline";
+    rid.textContent = meta.id || "—";
+    sum.appendChild(rid);
+    if (meta.help) {
+      sum.appendChild(document.createTextNode(" · "));
+      var peek = document.createElement("span");
+      peek.className = "a11y-lightbox-rule-help-peek";
+      var ht = String(meta.help);
+      peek.textContent = ht.length > 100 ? ht.slice(0, 97) + "…" : ht;
+      sum.appendChild(peek);
+    }
+    det.appendChild(sum);
+    var body = document.createElement("div");
+    body.className = "a11y-lightbox-rule-body";
+    if (meta.helpUrl) {
+      var pl = document.createElement("p");
+      pl.className = "a11y-lb-doc-lead";
+      var a = document.createElement("a");
+      a.href = meta.helpUrl;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      a.className = "axe-doc-primary";
+      a.textContent = "Deque University — full rule documentation →";
+      pl.appendChild(a);
+      body.appendChild(pl);
+    }
+    var pH = document.createElement("p");
+    pH.className = "a11y-lb-line";
+    var sH = document.createElement("strong");
+    sH.textContent = "Help:";
+    pH.appendChild(sH);
+    pH.appendChild(document.createTextNode(" " + (meta.help || "—")));
+    body.appendChild(pH);
+    var pD = document.createElement("p");
+    pD.className = "a11y-lb-line a11y-lb-desc";
+    var sD = document.createElement("strong");
+    sD.textContent = "Description:";
+    pD.appendChild(sD);
+    pD.appendChild(document.createTextNode(" " + (meta.description || "—")));
+    body.appendChild(pD);
+    if (meta.tags && meta.tags.length) {
+      var pT = document.createElement("p");
+      pT.className = "a11y-lb-tags";
+      var sT = document.createElement("strong");
+      sT.textContent = "Tags:";
+      pT.appendChild(sT);
+      pT.appendChild(document.createTextNode(" "));
+      meta.tags.forEach(function (tg, i) {
+        if (i) pT.appendChild(document.createTextNode(" "));
+        var sp = document.createElement("span");
+        sp.className = "tag";
+        sp.textContent = tg;
+        pT.appendChild(sp);
+      });
+      body.appendChild(pT);
+    }
+    det.appendChild(body);
+    wrap.appendChild(det);
+    return wrap;
+  }
+  function normalizeLightboxSnapshotLayout(host) {
+    var inner = host.querySelector(".a11y-visual-inner");
+    if (!inner) return;
+    var root = inner.firstElementChild;
+    while (root && root.classList && root.classList.contains("a11y-violation-highlight-overlay")) {
+      root = root.nextElementSibling;
+    }
+    if (!root) return;
+    var cs = window.getComputedStyle(root);
+    var pos = cs.position;
+    if (pos !== "absolute" && pos !== "fixed") return;
+    var rr = root.getBoundingClientRect();
+    if (rr.width < 8 || rr.height < 8) return;
+    var iw = inner.scrollWidth || inner.offsetWidth;
+    var pad = 16;
+    if (iw <= rr.width + pad * 3) return;
+    inner.style.minWidth = "0";
+    inner.style.width = Math.ceil(rr.width + pad * 2) + "px";
+    inner.style.minHeight = Math.ceil(rr.height + pad * 2) + "px";
+    inner.style.marginLeft = "auto";
+    inner.style.marginRight = "auto";
+    inner.style.boxSizing = "border-box";
+    root.style.position = "relative";
+    root.style.top = "0";
+    root.style.right = "auto";
+    root.style.bottom = "auto";
+    root.style.left = "0";
+    root.style.width = Math.ceil(rr.width) + "px";
+    root.style.minHeight = Math.ceil(rr.height) + "px";
+  }
+  function openLightbox(scriptId) {
+    var script = document.getElementById(scriptId);
+    var dlg = document.getElementById("a11y-visual-lightbox");
+    if (!script || !dlg) return;
+    var scroll = dlg.querySelector(".a11y-visual-lightbox-scroll");
+    var lbHost = dlg.querySelector(".a11y-visual-lightbox-host");
+    if (!scroll || !lbHost) return;
+    var prevRule = scroll.querySelector(".a11y-visual-lightbox-rule");
+    if (prevRule) prevRule.remove();
+    lbHost.innerHTML = "";
+
+    var ctxBar = document.getElementById("a11y-visual-lightbox-context");
+    if (ctxBar) {
+      ctxBar.innerHTML = "";
+      ctxBar.setAttribute("hidden", "hidden");
+    }
+
+    var metaScript = document.getElementById(scriptId + "-rule-meta");
+    var meta = null;
+    if (metaScript && metaScript.textContent) {
+      try {
+        meta = JSON.parse(metaScript.textContent);
+      } catch (eMeta) {
+        meta = null;
+      }
+    }
+    if (meta && (meta.id || meta.help || meta.helpUrl || (meta.tags && meta.tags.length))) {
+      scroll.insertBefore(buildLightboxRulePanel(meta), lbHost);
+    }
+
+    var ctxScript = document.getElementById(scriptId + "-lightbox-context");
+    if (ctxBar && ctxScript && ctxScript.textContent) {
+      try {
+        var ctx = JSON.parse(ctxScript.textContent);
+        var sel = ctx.target ? String(ctx.target) : "";
+        var page = ctx.pageUrl ? String(ctx.pageUrl) : "";
+        if (sel || page) {
+          ctxBar.removeAttribute("hidden");
+          if (sel) {
+            var pSel = document.createElement("p");
+            pSel.className = "a11y-lightbox-ctx-row a11y-lightbox-ctx-row--selector";
+            var l1 = document.createElement("strong");
+            l1.textContent = "Selector: ";
+            pSel.appendChild(l1);
+            var c1 = document.createElement("code");
+            c1.className = "a11y-lightbox-ctx-code";
+            c1.textContent = sel;
+            pSel.appendChild(c1);
+            ctxBar.appendChild(pSel);
+          }
+          if (page) {
+            var pPg = document.createElement("p");
+            pPg.className = "a11y-lightbox-ctx-row a11y-lightbox-ctx-row--page";
+            var l2 = document.createElement("strong");
+            l2.textContent = "Page: ";
+            pPg.appendChild(l2);
+            var a = document.createElement("a");
+            a.href = page;
+            a.target = "_blank";
+            a.rel = "noreferrer noopener";
+            a.className = "a11y-lightbox-ctx-link";
+            a.textContent = page;
+            pPg.appendChild(a);
+            ctxBar.appendChild(pPg);
+          }
+        }
+      } catch (eCtx) {}
+    }
+
+    var data = {};
+    try {
+      data = JSON.parse(script.textContent || "{}");
+    } catch (e) {
+      return;
+    }
+    var inner = renderIntoHost(lbHost, data);
+    if (inner) {
+      inner.style.transform = "none";
+      inner.style.maxWidth = "none";
+      inner.style.overflow = "visible";
+    }
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        normalizeLightboxSnapshotLayout(lbHost);
+        var inner2 = lbHost.querySelector(".a11y-visual-inner");
+        var overlay = inner2 && inner2.querySelector(".a11y-violation-highlight-overlay");
+        if (overlay && inner2) {
+          try {
+            overlay.style.height = inner2.scrollHeight + "px";
+          } catch (eOv) {}
+        }
+        var focal = lbHost.querySelector("[data-a11y-focal]");
+        if (focal && typeof focal.scrollIntoView === "function") {
+          try {
+            focal.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
+          } catch (eScroll) {
+            try {
+              focal.scrollIntoView(true);
+            } catch (e2) {}
+          }
+        }
+      });
+    });
+    document.documentElement.style.overflow = "hidden";
+    dlg.showModal();
+  }
+  function restoreHtmlScrollAfterLightbox() {
+    document.documentElement.style.overflow = "";
+  }
+  function wireLightboxChrome() {
+    var dlg = document.getElementById("a11y-visual-lightbox");
+    if (!dlg || dlg.getAttribute("data-a11y-lightbox-wired") === "1") return;
+    dlg.setAttribute("data-a11y-lightbox-wired", "1");
+    var btn = dlg.querySelector(".a11y-visual-lightbox-close");
+    function closeLightbox(ev) {
+      if (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+      }
+      dlg.close();
+      restoreHtmlScrollAfterLightbox();
+    }
+    if (btn) {
+      btn.addEventListener("click", closeLightbox, true);
+    }
+    dlg.addEventListener("close", restoreHtmlScrollAfterLightbox);
+    dlg.addEventListener("cancel", restoreHtmlScrollAfterLightbox);
+  }
+  document.body.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-a11y-zoom]");
+    if (!btn) return;
+    e.preventDefault();
+    var sid = btn.getAttribute("data-a11y-zoom");
+    if (sid) openLightbox(sid);
+  });
+  function boot() {
+    document.querySelectorAll('script[type="application/json"][data-a11y-visual]').forEach(function (s) {
+      if (s.id) mount(s.id);
+    });
+  }
+  function bootAll() {
+    boot();
+    wireLightboxChrome();
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", bootAll);
+  } else {
+    bootAll();
+  }
+})();
+</script>`;
+
+/** Maps machine snapshot error codes to short reader-facing text. */
+const formatVisualSnapshotErr = (code) => {
+  const c = String(code || "").trim();
+  const labels = {
+    "unresolved-cross-origin-or-sandboxed-iframe":
+      "Unresolved (cross-origin or sandboxed iframe — node not reachable from the test window)",
+    "unresolved-open-shadow-or-dynamic-target":
+      "Unresolved (open shadow DOM or selector no longer matches — try timing or shadow-friendly selectors)",
+    "unresolved-selector-inside-frame-or-shadow":
+      "Unresolved (selector inside iframe/shadow did not match)",
+    "unresolved-invalid-selector": "Unresolved (invalid CSS selector in axe target chain)",
+    "unresolved-empty-selector-segment": "Unresolved (empty selector segment in axe target)",
+    unresolved: "Unresolved (element not found for axe target)",
+    "unresolved-transient-or-internal":
+      "Unresolved (internal diagnostic — if this persists, file an issue with the axe target payload)",
+    detached: "Detached (element left the DOM before capture)",
+    "no-element": "No element",
+  };
+  return labels[c] || `Unresolved (${escapeHtml(c)})`;
+};
+
 /** Turn disclaimer plaintext into HTML with safe links for axe-core / Deque references. */
 const renderDisclaimerLineHtml = (line) =>
   escapeHtml(line)
@@ -224,7 +783,7 @@ const formatRuleSourceSummary = (v) => {
  * @param {object} v
  * @returns {string}
  */
-const renderA11yRuleReference = (v) => {
+const renderA11yRuleReference = (v, extraClass = "", ariaLabelSuffix = "") => {
   const helpUrl = v.helpUrl ? String(v.helpUrl) : "";
   const primaryLink = helpUrl
     ? `<p class="axe-doc-lead">
@@ -234,12 +793,29 @@ const renderA11yRuleReference = (v) => {
   const tags = (v.tags || []).length
     ? `<p class="axe-tags">Tags: ${(v.tags || []).map((t) => `<span class="tag">${escapeHtml(t)}</span>`).join(" ")}</p>`
     : "";
-  return `<section class="axe-rule-ref" aria-label="Accessibility rule ${escapeHtml(v.id || "")}">
+  const cls = `axe-rule-ref${extraClass ? ` ${extraClass}` : ""}`;
+  const ariaSuffix = ariaLabelSuffix ? ` — ${escapeHtml(ariaLabelSuffix)}` : "";
+  return `<section class="${cls}" aria-label="Accessibility rule ${escapeHtml(v.id || "")}${ariaSuffix}">
   ${primaryLink}
   <p class="axe-help-title"><strong>Help:</strong> ${escapeHtml(v.help || "—")}</p>
   <p class="axe-desc"><strong>Description:</strong> ${escapeHtml(v.description || "—")}</p>
   ${tags}
 </section>`;
+};
+
+/**
+ * Per-node row: compact summary line (like “Show HTML”); expanded body has full rule/group docs.
+ * @param {object} v grouped violation
+ * @param {string} ariaLabelSuffix
+ */
+const renderNodeRuleHelpExpandable = (v, ariaLabelSuffix = "") => {
+  const ariaSuffix = ariaLabelSuffix ? ` — ${escapeHtml(ariaLabelSuffix)}` : "";
+  return `<details class="html-snippet node-rule-expand" aria-label="Rule documentation for this finding${ariaSuffix}">
+  <summary class="html-snippet-summary">Help: ${escapeHtml(v.help || "—")}</summary>
+  <div class="node-rule-expand-body">
+    ${renderA11yRuleReference(v, "axe-rule-ref--node-expand", ariaLabelSuffix)}
+  </div>
+</details>`;
 };
 
 /**
@@ -268,13 +844,14 @@ const renderFailureSummaryBlock = (text) => {
 // --- Table rows for affected nodes (target, page URL, recurrence, scans, HTML snippet) ---
 /**
  * @param {object[]} nodeDetails
- * @param {string} [ruleId]
+ * @param {object} violation Grouped rule card (same fields as renderViolationCard header / axe block).
  * @returns {string}
  */
-const renderNodeRows = (nodeDetails, ruleId) => {
+const renderNodeRows = (nodeDetails, violation) => {
   if (!Array.isArray(nodeDetails) || nodeDetails.length === 0) {
     return "<p class=\"nodata\">No node details.</p>";
   }
+  const ruleId = violation?.id;
   const safe = String(ruleId || "rule").replace(/[^a-zA-Z0-9_-]/g, "_");
   const prioritizedNodeDetails = [...nodeDetails].sort((a, b) => {
     const aRepeated = Boolean(a?.repeatedFromEarlierReport);
@@ -286,6 +863,7 @@ const renderNodeRows = (nodeDetails, ruleId) => {
     .map(
       (node, index) => {
         const rowId = `node-${safe}-${index}`;
+        const visDomId = `a11y-vis-${safe}-${index}`;
         const pageLine = node.pageUrl
           ? `<p class="node-page subtle" title="Page when this node was reported">Page: <a href="${escapeHtml(
             node.pageUrl
@@ -303,15 +881,13 @@ const renderNodeRows = (nodeDetails, ruleId) => {
 </aside>`
           : "";
         const trClass = `node-group${rowRecurrence ? " node-group--recurrence" : ""}`;
+        const rowAriaSuffix = `Row ${index + 1} of ${prioritizedNodeDetails.length}`;
+        const rowRuleExpand = renderNodeRuleHelpExpandable(violation, rowAriaSuffix);
         const recurrenceCompactBlock = rowRecurrence
           ? `<details class="node-recurrence-compact">
   <summary class="node-recurrence-compact-summary">Show recurring finding details</summary>
   <div class="node-recurrence-compact-body">
     ${firstReportIdLine}
-    <div class="node-section node-section-counts node-detail-block">
-      <div class="node-section-eyebrow">Scans</div>
-      ${renderNodeSourceAndCounts(node)}
-    </div>
     <div class="node-fix-html-column" role="group" aria-label="Fix guidance and source HTML">
       <div class="node-section node-section-axe node-section-bleed node-detail-block">
         ${renderFailureSummaryBlock(node.failureSummary)}
@@ -328,14 +904,15 @@ const renderNodeRows = (nodeDetails, ruleId) => {
             : ""
           }
     </div>
+    <div class="node-section node-section-counts node-detail-block">
+      <div class="node-section-eyebrow">Scans</div>
+      <div class="node-scans-nested">${renderNodeSourceAndCounts(node)}</div>
+    </div>
   </div>
 </details>`
           : "";
         const standardBlock = !rowRecurrence
-          ? `<div class="node-section node-section-counts node-detail-block">
-            <div class="node-section-eyebrow">Scans</div>
-            ${renderNodeSourceAndCounts(node)}
-          </div>
+          ? `${rowRuleExpand}
           <div class="node-fix-html-column" role="group" aria-label="Fix guidance and source HTML">
             <div class="node-section node-section-axe node-section-bleed node-detail-block">
               ${renderFailureSummaryBlock(node.failureSummary)}
@@ -350,8 +927,32 @@ const renderNodeRows = (nodeDetails, ruleId) => {
               </details>
             </div>`
             : ""
-          }`
+          }
+          </div>
+          <div class="node-section node-section-counts node-detail-block">
+            <div class="node-section-eyebrow">Scans</div>
+            <div class="node-scans-nested">${renderNodeSourceAndCounts(node)}</div>
+          </div>`
           : "";
+
+        let visualCell = "";
+        if (rowRecurrence) {
+          visualCell = `<td class="col-visual" valign="top"><span class="subtle visual-omit">Omitted (repeated finding)</span></td>`;
+        } else if (node.visualSnapshot?.r) {
+          visualCell = `<td class="col-visual" valign="top">${renderNodeVisualThumb(
+            visDomId,
+            node.visualSnapshot,
+            violation,
+            node
+          )}</td>`;
+        } else if (node.visualSnapshot?.err) {
+          visualCell = `<td class="col-visual" valign="top"><span class="subtle visual-snapshot-err" title="${escapeHtml(
+            node.visualSnapshot.err
+          )}">${formatVisualSnapshotErr(node.visualSnapshot.err)}</span></td>`;
+        } else {
+          visualCell = `<td class="col-visual" valign="top"><span class="subtle">—</span></td>`;
+        }
+
         return `
     <tr class="${trClass}" id="${rowId}">
       <th class="col-target" scope="row" valign="top">
@@ -364,9 +965,11 @@ const renderNodeRows = (nodeDetails, ruleId) => {
         <code class="node-target-code" title="${escapeHtml(node.target)}">${escapeHtml(node.target)}</code>
         ${pageLine}
       </th>
+      ${visualCell}
       <td class="col-node-rollup" valign="top">
         <div class="node-rollup" role="group" aria-label="Details for this row’s target">
           ${recurrenceBanner}
+          ${rowRecurrence ? rowRuleExpand : ""}
           ${standardBlock}
           ${recurrenceCompactBlock}
         </div>
@@ -400,9 +1003,9 @@ const renderViolationCard = (v) => {
       <strong>${Number(v.totalOccurrences || 0)}</strong> occurrence(s)
     </p>
     <table class="nodes">
-      <thead><tr><th>Selector / target</th><th>Scans, axe message, and HTML for that row</th></tr></thead>
+      <thead><tr><th>Selector / target</th><th>Visual snapshot</th><th>Help, fix guidance, HTML, and scans</th></tr></thead>
       <tbody>
-        ${renderNodeRows(v.nodeDetails, v.id)}
+        ${renderNodeRows(v.nodeDetails, v)}
       </tbody>
     </table>
   </article>`;
@@ -505,6 +1108,63 @@ const renderLiveA11yReportHtml = (report) => {
     : `${testInSuiteLabel}${checkpointSuffix}`;
   const duplicateStats = buildFallbackDuplicateStats(violations);
   const reportEmissionInSpec = Number(artifact.reportEmissionInSpec || 0);
+
+  const pageVisualEntriesRaw = Array.isArray(report.initialPageVisuals) ? report.initialPageVisuals : [];
+  const pageVisualEntries = pageVisualEntriesRaw.filter((e) => e && e.r && !e.err);
+  const legacySingleOverview =
+    report.initialPageVisual &&
+    report.initialPageVisual.r &&
+    !report.initialPageVisual.err &&
+    pageVisualEntries.length === 0
+      ? [
+        {
+          pageUrl: report.initialPageUrl || report.initialPageVisual.url || "",
+          ...report.initialPageVisual,
+        },
+      ]
+      : [];
+  const pageVisualSectionsList = pageVisualEntries.length > 0 ? pageVisualEntries : legacySingleOverview;
+
+  const pagePreviewOk = pageVisualSectionsList.length > 0;
+  const anyRenderableNodePreview = violations.some((v) =>
+    (v.nodeDetails || []).some((n) => !n.repeatedFromEarlierReport && n.visualSnapshot?.r)
+  );
+  const includeVisualBoot = pagePreviewOk || anyRenderableNodePreview;
+
+  const pageVisualOverviewJumpNav = pagePreviewOk
+    ? `<nav class="page-visual-between-metrics-nav" aria-label="Page visual overview">
+      <a class="page-visual-jump" href="#page-visual-full">Go to page visual overview (at end of report)</a>
+    </nav>`
+    : "";
+
+  const pageVisualFullSection = pagePreviewOk
+    ? `${pageVisualSectionsList
+      .map((entry, idx) => {
+        const scriptId = `a11y-page-overview-data-${idx}`;
+        const anchorId = idx === 0 ? "page-visual-full" : `page-visual-full-${idx}`;
+        const total = pageVisualSectionsList.length;
+        const titleSuffix = total > 1 ? ` (${idx + 1} of ${total})` : "";
+        const urlRaw = String(entry.pageUrl || entry.url || "").trim();
+        const urlEsc = escapeHtml(urlRaw);
+        const urlLine = urlRaw
+          ? `<p class="page-visual-url-line"><strong>Initial scan URL:</strong> <a href="${urlEsc}" target="_blank" rel="noreferrer">${urlEsc}</a></p>`
+          : `<p class="page-visual-url-line subtle"><strong>Initial scan URL:</strong> —</p>`;
+        const vw = entry.viewport && Number(entry.viewport.w) > 0 ? Number(entry.viewport.w) : 0;
+        const pageHostSizer =
+          vw > 0 ? ` style="width:min(100%,${vw}px);max-width:100%;box-sizing:border-box;"` : "";
+        return `<section class="page-visual-full" id="${escapeHtml(anchorId)}" aria-label="Page visual overview ${idx + 1}">
+        <h2>Page visual overview${escapeHtml(titleSuffix)}</h2>
+        ${urlLine}
+        <p class="subtle">Serialized DOM for this page’s initial full-page scan — not a Cypress screenshot. Dashed outlines show affected elements (most severe drawn on top). One section is recorded each time the monitor runs an initial full-page scan (for example after each navigation). Checkpoint reports only include page overviews from that checkpoint scan.</p>
+        ${renderVisualJsonScript(scriptId, entry)}
+        <div class="page-visual-full-shell">
+          <div class="a11y-visual-host"${pageHostSizer} data-a11y-visual-host="${escapeHtml(scriptId)}" role="img" aria-label="Page overview"></div>
+        </div>
+      </section>`;
+      })
+      .join("\n")}
+    <p class="page-visual-back-top"><a href="#top">Back to top</a></p>`
+    : "";
 
   // If Node reporter did not attach `report.summary`, synthesize identity + technical metrics + tooltips.
   const fallbackSummary = {
@@ -976,6 +1636,39 @@ const renderLiveA11yReportHtml = (report) => {
     .tech-expand {
       margin: 0.2rem 0 0.65rem;
     }
+    .page-visual-between-metrics-nav {
+      margin: 0.35rem 0 1.15rem;
+      padding: 0.55rem 0 0.85rem;
+      border-bottom: 1px dashed var(--border);
+    }
+    .node-rule-expand { margin: 0 0 0.55rem; }
+    .node-rule-expand-body {
+      margin-top: 0.45rem;
+      padding-top: 0.35rem;
+      border-top: 1px dashed var(--border);
+    }
+    .node-rule-expand-body .axe-rule-ref--node-expand {
+      margin: 0;
+    }
+    .page-visual-jump {
+      display: inline-block;
+      font-size: 0.92rem;
+      font-weight: 600;
+      color: var(--link);
+      text-decoration: none;
+      padding: 0.4rem 0.85rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(56, 139, 253, 0.1);
+    }
+    .page-visual-jump:hover {
+      text-decoration: underline;
+      border-color: var(--link);
+    }
+    .page-visual-jump:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
     .tech-expand > summary {
       cursor: pointer;
       list-style: none;
@@ -1277,8 +1970,9 @@ const renderLiveA11yReportHtml = (report) => {
     .ext { font-size: 1rem; }
     .nodes { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 0.88rem; margin: 0.75rem 0; }
     .nodes th { text-align: left; color: var(--muted); font-weight: 500; border-bottom: 1px solid var(--border); padding: 0.4rem; }
-    .nodes th:first-child { width: 28%; }
-    .nodes th:last-child { width: 72%; }
+    .nodes th:first-child { width: 22%; }
+    .nodes th:nth-child(2) { width: 20%; }
+    .nodes th:last-child { width: 58%; }
     .nodes td, .nodes th.col-target {
       vertical-align: top;
       padding: 0.5rem 0.4rem;
@@ -1371,6 +2065,9 @@ const renderLiveA11yReportHtml = (report) => {
       padding-top: 0.08rem;
       padding-left: 0.7rem;
     }
+    .node-group--recurrence .node-section-counts .node-scans-nested {
+      padding-left: 0.7rem;
+    }
     .node-group--recurrence .node-section-eyebrow {
       font-size: 0.74rem;
       margin-bottom: 0.22rem;
@@ -1382,6 +2079,14 @@ const renderLiveA11yReportHtml = (report) => {
     .node-detail-block { width: 100%; max-width: 100%; align-self: stretch; }
     .node-section { margin-top: 0.55rem; }
     .node-section-counts { margin-top: 0.1rem; }
+    .node-section-counts .node-scans-nested {
+      margin-top: 0.2rem;
+      padding: 0.35rem 0 0.15rem 1.1rem;
+      border-left: 2px solid #30363d;
+      box-sizing: border-box;
+      width: 100%;
+      max-width: 100%;
+    }
     .node-section-eyebrow { font-size: 0.8rem; font-weight: 600; color: var(--muted); margin: 0 0 0.35rem; }
     .node-section-bleed { text-align: left; width: 100%; max-width: 100%; }
     .node-section-axe { margin-top: 0.6rem; }
@@ -1434,6 +2139,281 @@ const renderLiveA11yReportHtml = (report) => {
     .nodata { color: var(--muted); }
     footer { margin-top: 2rem; font-size: 0.95rem; color: var(--muted); }
     .report-footnote { margin-top: 0.75rem; }
+    .page-visual-url-line {
+      margin: 0.35rem 0 0.75rem;
+      font-size: 0.92rem;
+      word-break: break-all;
+    }
+    .page-visual-url-line a { color: var(--link); }
+    .page-visual-back-top { margin: 1rem 0 0; font-size: 0.92rem; }
+    .page-visual-full {
+      margin: 2rem 0 1rem;
+      padding: 1rem 0 0;
+      border-top: 1px solid var(--border);
+    }
+    .page-visual-full-shell {
+      max-height: 78vh;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      background: #0d1117;
+      margin-top: 0.5rem;
+      transform: translateZ(0);
+      isolation: isolate;
+      contain: layout paint;
+    }
+    .a11y-visual-host {
+      display: block;
+      min-height: 20px;
+      font-size: 12px;
+      line-height: 1.35;
+      color: var(--text);
+      transform: translateZ(0);
+      isolation: isolate;
+      contain: layout paint;
+      position: relative;
+      overflow: auto;
+      max-width: 100%;
+    }
+    .a11y-visual-inner {
+      display: inline-block;
+      max-width: 100%;
+      vertical-align: top;
+      position: relative;
+    }
+    .a11y-visual-thumb-wrap { max-width: 260px; }
+    .a11y-visual-thumb-btn {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+      width: 100%;
+      padding: 8px;
+      margin: 0;
+      cursor: zoom-in;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      color: var(--muted);
+      font: inherit;
+      text-align: center;
+    }
+    .a11y-visual-thumb-btn:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 2px;
+    }
+    .a11y-visual-thumb-viewport {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 168px;
+      overflow: hidden;
+      border-radius: 6px;
+      background: #010409;
+      box-sizing: border-box;
+      padding: 10px;
+      transform: translateZ(0);
+      isolation: isolate;
+      /* Avoid contain:size — it can zero-size the thumb host so previews paint as empty/black. */
+      contain: layout paint;
+    }
+    .a11y-visual-host--thumb {
+      flex: 0 0 auto;
+      font-size: 11px;
+      line-height: 1.35;
+      overflow: hidden !important;
+      max-width: none;
+      max-height: none;
+      contain: layout paint;
+      isolation: isolate;
+      transform: translateZ(0);
+    }
+    .a11y-visual-thumb-caption { font-size: 0.72rem; color: var(--muted); line-height: 1.3; }
+    /* Closed <dialog> must stay hidden; plain display:flex overrides UA dialog:not([open]) rules. */
+    .a11y-visual-lightbox:not([open]) {
+      display: none !important;
+    }
+    .a11y-visual-lightbox[open] {
+      display: flex;
+      flex-direction: column;
+      max-width: min(96vw, 1100px);
+      width: min(96vw, 1100px);
+      max-height: 90vh;
+      margin: auto;
+      border: 2px solid #f78166;
+      border-radius: 12px;
+      background: #161b22;
+      color: var(--text);
+      padding: 0;
+      box-shadow:
+        0 0 0 1px rgba(255, 255, 255, 0.12),
+        0 8px 28px rgba(0, 0, 0, 0.45),
+        0 28px 90px rgba(0, 0, 0, 0.72);
+      overflow: hidden;
+    }
+    .a11y-visual-lightbox::backdrop {
+      background: rgba(5, 8, 14, 0.88);
+      backdrop-filter: blur(3px);
+    }
+    .a11y-visual-lightbox-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      flex-shrink: 0;
+      padding: 10px 12px;
+      margin: 0;
+      border-bottom: 1px solid rgba(248, 129, 102, 0.45);
+      background: linear-gradient(180deg, #0d1117 0%, #0b0f14 100%);
+    }
+    .a11y-visual-lightbox-context {
+      flex: 1;
+      min-width: 0;
+      text-align: left;
+      font-size: 0.78rem;
+      line-height: 1.45;
+      color: var(--muted);
+    }
+    .a11y-visual-lightbox-context[hidden] {
+      display: none !important;
+    }
+    .a11y-lightbox-ctx-row {
+      margin: 0 0 0.28rem;
+    }
+    .a11y-lightbox-ctx-row:last-child {
+      margin-bottom: 0;
+    }
+    .a11y-lightbox-ctx-row--selector .a11y-lightbox-ctx-code {
+      font-size: 1rem;
+      line-height: 1.45;
+    }
+    .a11y-lightbox-ctx-row--selector strong {
+      font-size: 0.85rem;
+    }
+    .a11y-lightbox-ctx-row--page {
+      font-size: 0.78rem;
+    }
+    .a11y-lightbox-ctx-row--page strong {
+      font-size: 0.78rem;
+    }
+    .a11y-lightbox-ctx-code {
+      font-size: 0.76rem;
+      word-break: break-word;
+      color: var(--text);
+    }
+    .a11y-lightbox-ctx-link {
+      color: var(--link);
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .a11y-lightbox-ctx-link:hover {
+      text-decoration: underline;
+    }
+    .a11y-visual-lightbox-close {
+      cursor: pointer;
+      font: inherit;
+      padding: 0.35rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      flex-shrink: 0;
+      align-self: flex-start;
+    }
+    .a11y-visual-lightbox-scroll {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-x: auto;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      padding: 14px;
+      box-sizing: border-box;
+      -webkit-overflow-scrolling: touch;
+      background: linear-gradient(180deg, rgba(13, 17, 23, 0.98) 0%, rgba(22, 27, 34, 0.99) 100%);
+      border-top: 1px solid rgba(248, 129, 102, 0.35);
+    }
+    .a11y-visual-lightbox-rule {
+      margin: 0 0 12px;
+    }
+    .a11y-lightbox-rule-details {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #0d1117;
+      padding: 0;
+      overflow: hidden;
+    }
+    .a11y-lightbox-rule-summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 8px 12px;
+      font-size: 0.82rem;
+      line-height: 1.4;
+      color: var(--text);
+      background: rgba(22, 27, 34, 0.95);
+    }
+    .a11y-lightbox-rule-summary::-webkit-details-marker { display: none; }
+    .a11y-lightbox-rule-summary::before {
+      content: "▶ ";
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+    .a11y-lightbox-rule-details[open] > .a11y-lightbox-rule-summary::before {
+      content: "▼ ";
+    }
+    .a11y-lightbox-rule-summary-lead {
+      font-weight: 700;
+      color: var(--muted);
+      text-transform: uppercase;
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      margin-right: 0.25rem;
+    }
+    .a11y-lightbox-rule-id-inline {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--link);
+    }
+    .a11y-lightbox-rule-help-peek {
+      color: var(--muted);
+      font-weight: 400;
+    }
+    .a11y-lightbox-rule-body {
+      padding: 8px 12px 10px;
+      border-top: 1px solid var(--border);
+      font-size: 0.84rem;
+      line-height: 1.45;
+    }
+    .a11y-lightbox-rule-body .a11y-lb-doc-lead {
+      margin: 0 0 0.5rem;
+    }
+    .a11y-lightbox-rule-body .a11y-lb-line {
+      margin: 0.35rem 0;
+    }
+    .a11y-lightbox-rule-body .a11y-lb-tags {
+      margin: 0.45rem 0 0.1rem;
+      font-size: 0.8rem;
+    }
+    .a11y-visual-lightbox-host {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      width: 100%;
+      min-height: 40px;
+      overflow: visible;
+      transform: none;
+      isolation: auto;
+      contain: none;
+    }
+    .a11y-visual-lightbox-host .a11y-visual-inner {
+      flex-shrink: 0;
+      transform: none !important;
+      max-width: none !important;
+      overflow: visible !important;
+    }
+    .visual-omit { font-size: 0.82rem; }
+    .visual-snapshot-err { font-size: 0.82rem; line-height: 1.35; display: inline-block; max-width: 100%; }
   </style>
 </head>
 <body>
@@ -1469,15 +2449,19 @@ const renderLiveA11yReportHtml = (report) => {
         </details>
       </section>
     </div>
+    ${pageVisualOverviewJumpNav}
     <h2 class="severity-entry-title">By severity (rules grouped findings)</h2>
     <div class="sev-pills">${sevPills || "<span class=\"subtle\">No grouped findings in output.</span>"}</div>
     ${errorsBlock}
     ${bySeveritySections || "<p class=\"subtle\">No grouped findings to show.</p>"}
+    ${pageVisualFullSection}
     <footer>
       <p>Generated for interactive review — keep JSON for machine use.</p>
       <p class="report-footnote">${footnoteHtml}</p>
     </footer>
   </main>
+  ${includeVisualBoot ? renderVisualLightboxDialog() : ""}
+  ${includeVisualBoot ? renderVisualBootScript() : ""}
 </body>
 </html>`;
 };

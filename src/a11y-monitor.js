@@ -5,6 +5,11 @@
  * (included/warn impacts) are applied after axe runs so behavior stays deterministic.
  */
 import { AXE_IMPACT_ORDER } from './a11y-shared-constants.js';
+import {
+  normalizeVisualSnapshotOptions,
+  enrichA11yResultsWithElementSnapshots,
+  captureInitialPageVisualForStore,
+} from './a11y-visual-snapshot.js';
 
 /* ---------------------------------------------------------------------------
  * Default CSS selector groups used to find semantic overlays (dialogs, popovers,
@@ -65,6 +70,8 @@ export const DEFAULT_INTERACTIVE_SELECTOR = [
 function createDefaultStore() {
   return {
     initial: null,
+    initialPageVisual: null,
+    initialPageVisuals: [],
     live: [],
     errors: [],
     meta: {
@@ -185,13 +192,12 @@ function mergeA11yResults(baseResults = createEmptyA11yResults(), extraResults =
 }
 
 function addFramePrefixToResults(results, framePrefix) {
+  const prefix = String(framePrefix || '').trim();
   const mapNodes = (nodes = []) =>
     nodes.map((node) => {
       const target = Array.isArray(node?.target) ? node.target : [];
-      const prefixedTarget =
-        target.length > 0
-          ? target.map((selector) => `${framePrefix} >>> ${selector}`)
-          : [framePrefix];
+      const inner = target.map((s) => String(s || '').trim()).filter(Boolean);
+      const prefixedTarget = inner.length > 0 ? (prefix ? [prefix, ...inner] : inner) : prefix ? [prefix] : [];
       return {
         ...node,
         target: prefixedTarget,
@@ -292,6 +298,8 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     sharedStore: null,
 
     ...userOptions,
+
+    visualSnapshots: normalizeVisualSnapshotOptions(userOptions.visualSnapshots),
     // Deep-merge preNavigationFlush so caller can override single flags without losing defaults.
     preNavigationFlush: {
       enabled: false,
@@ -305,6 +313,13 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
 
   /* Snapshot of configured severity/rule filters for reporters and tests. */
   const store = options.sharedStore || createDefaultStore();
+
+  if (!Object.prototype.hasOwnProperty.call(store, 'initialPageVisual')) {
+    store.initialPageVisual = null;
+  }
+  if (!Array.isArray(store.initialPageVisuals)) {
+    store.initialPageVisuals = [];
+  }
 
   if (!store.meta) {
     store.meta = {
@@ -336,6 +351,17 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
       ...normalizeRunOnlyValuesFromA11yOptions(options.liveAxeOptions),
     ]),
   ];
+  store.meta.visualSnapshots = {
+    enabled: options.visualSnapshots.enabled === true,
+    pageOverview:
+      options.visualSnapshots.enabled === true &&
+      options.visualSnapshots.pageOverview?.enabled !== false,
+    elementPreviews:
+      options.visualSnapshots.enabled === true &&
+      options.visualSnapshots.element?.enabled !== false,
+    maxNodesPerScan: options.visualSnapshots.maxNodesPerScan,
+  };
+
   store.meta.analysis = {
     configuredImpactLevels: configuredEffectiveImpactLevels,
     configuredIncludedImpactLevels,
@@ -791,7 +817,8 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     }
   }
 
-  async function runSameOriginIframesA11y(target, axeOptions) {
+  async function runSameOriginIframesA11y(target, axeOptions, iframeOpts = {}) {
+    const skipImpactFilter = Boolean(iframeOpts.skipImpactFilter);
     if (!axeOptions?.iframes) {
       return createEmptyA11yResults();
     }
@@ -812,7 +839,9 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
           iframes: false,
         });
         const frameRawResults = await frameWin.axe.run(frameDoc, frameOptions);
-        const frameResults = filterA11yResultsByImpact(frameRawResults, axeOptions);
+        const frameResults = skipImpactFilter
+          ? frameRawResults
+          : filterA11yResultsByImpact(frameRawResults, axeOptions);
         const prefixed = addFramePrefixToResults(frameResults, iframeLocator(iframeEl));
         merged = mergeA11yResults(merged, prefixed);
       } catch {
@@ -894,6 +923,11 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
           const results = await runA11ySerial(next.root, options.liveAxeOptions);
 
           state.scannedCycle = state.cycle;
+
+          const vsLive = options.visualSnapshots;
+          if (vsLive?.enabled) {
+            enrichA11yResultsWithElementSnapshots(win, doc, results, vsLive);
+          }
 
           store.live.push({
             rootId,
@@ -1078,6 +1112,10 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
 
     try {
       const results = await runA11ySerial(doc, options.liveAxeOptions);
+      const vsFb = options.visualSnapshots;
+      if (vsFb?.enabled) {
+        enrichA11yResultsWithElementSnapshots(win, doc, results, vsFb);
+      }
       store.live.push({
         rootId: 'document',
         rootType: 'full-page-fallback',
@@ -1121,6 +1159,10 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
 
     runA11ySerial(doc, options.liveAxeOptions)
       .then((results) => {
+        const vsNav = options.visualSnapshots;
+        if (vsNav?.enabled) {
+          enrichA11yResultsWithElementSnapshots(win, doc, results, vsNav);
+        }
         store.live.push({
           rootId: 'document',
           rootType: 'pre-navigation-full-page',
@@ -1343,6 +1385,30 @@ export function installLiveA11yMonitor(win, userOptions = {}) {
     const filtered = filterA11yResultsByImpact(rawResults, initialAxeOptions);
     const iframeResults = await runSameOriginIframesA11y(doc, initialAxeOptions);
     const results = mergeA11yResults(filtered, iframeResults);
+
+    let hlAxeResults = results;
+    if (getExplicitImpactFilterFromA11yOptions(initialAxeOptions) != null) {
+      const iframeRawMerged = await runSameOriginIframesA11y(doc, initialAxeOptions, {
+        skipImpactFilter: true,
+      });
+      hlAxeResults = mergeA11yResults(rawResults, iframeRawMerged);
+    }
+
+    const vsInit = options.visualSnapshots;
+    if (vsInit?.enabled) {
+      enrichA11yResultsWithElementSnapshots(win, doc, results, vsInit);
+      await Promise.resolve();
+      await new Promise((resolve) => {
+        win.requestAnimationFrame(() => {
+          win.requestAnimationFrame(resolve);
+        });
+      });
+      captureInitialPageVisualForStore(win, doc, store, vsInit, hlAxeResults);
+    } else {
+      store.initialPageVisual = null;
+      store.initialPageVisuals = [];
+    }
+
     store.initial = results;
     store.initialPageUrl = String(win.location.href);
     touch();

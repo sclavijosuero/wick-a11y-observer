@@ -15,6 +15,7 @@
 - Selecting a reported finding in the Cypress command log highlights the related element(s) in the Cypress runner for faster visual debugging.
 - CI-friendly terminal output: the Node reporter task prints a summary by severity and a grouped list of violations with affected nodes.
 - Generates paired artifacts (`.json` + `.html`) with scan metadata, impact summaries, and report IDs for traceability.
+- **Optional lightweight visual previews in HTML reports** (serialized DOM + selected computed styles — not Cypress screenshots): initial page overview plus per-node thumbnails, with previews omitted for cross-report repeated findings to save space.
 - Per-test runtime overrides for setup and reporting (`cy.setLiveA11yAutoSetupOptions(...)` and `cy.setLiveA11yAutoReportOptions(...)`).
 - Built-in validation controls (for example included-impact failure, minimum live scans, runtime error checks).
 
@@ -187,6 +188,7 @@ Sets runtime setup/observer options for the auto lifecycle in the current test.
   - `initialAxeOptions?: LiveA11yRunOptions`: axe options used for the initial full-page scan after navigation.
   - `liveAxeOptions?: LiveA11yRunOptions`: axe options used for follow-up live scans triggered by DOM changes.
   - `observerOptions?: LiveA11yObserverOptions`: monitor behavior settings (for example queue size, fallback scanning behavior, debounce/idle behavior).
+  - `visualSnapshots?: LiveA11yVisualSnapshotsOptions`: optional lightweight DOM previews for HTML reports (can also be set inside `observerOptions.visualSnapshots`; a top-level value wins over `observerOptions` when both are present).
   - `includeIncompleteInReport?: boolean`: includes axe `incomplete` results in report counts/details when reports are generated.
   - `generateReports?: boolean`: enables/disables writing JSON + HTML report artifacts in the auto lifecycle.
   - `runAccessibility?: boolean`: explicit on/off switch for this test's auto lifecycle (`true` runs it, `false` skips it).
@@ -433,6 +435,80 @@ Notes:
 
 Analysis options in the HTML report now include a `Scan mode` row so you can quickly tell whether the report came from a live or checkpoint flow.
 
+## Visual snapshots in HTML reports
+
+HTML reports can include **approximate visual previews** built from a **small serialized DOM subtree** and a **whitelist of computed CSS properties** converted to inline styles. This is **not** a bitmap screenshot: the plugin never calls Cypress screenshot APIs, so capture stays cheap enough to run during rapid live scans.
+
+### How this differs from Cypress screenshots
+
+- **No `cy.screenshot()`** — previews are reconstructed in the standalone HTML via embedded JSON and a tiny inline script.
+- **Fast path** — work runs synchronously after each axe pass with strict caps (max nodes per scan, subtree depth, text length).
+- **Approximate** — complex layout (fonts, transforms, images, shadow DOM, cross-origin iframes) may differ from what users see in a browser.
+
+### Where previews appear
+
+- **Initial / checkpoint scan**: **full-page visual overviews** appear **only at the end** of the HTML report (after severity sections). Each time the monitor runs an **initial full-page scan** for a URL (including after navigations), a section is appended with **`#page-visual-full`** for the first page and **`#page-visual-full-1`**, **`#page-visual-full-2`**, … for later pages. Each block shows the **initial scan URL** and **dashed rectangles** for affected elements (normalized by severity; **more severe outlines are drawn last**).
+- **Each grouped violation row**: a **Visual snapshot** column shows a **fitted thumbnail** (full subtree centered/scaled inside the frame). The capture roots at the **nearest modal/drawer/popover-style container** when possible, otherwise **one shallow parent** for minimal context. The failing node has a **dashed outline** in the rule’s impact color. **Click the thumbnail** to open the **full serialized capture** in a dialog.
+- **Repeated findings** (`repeatedFromEarlierReport`): the HTML **omits** the per-node preview and shows a short note so JSON/HTML stay smaller for noisy recurring issues.
+
+Live scans and checkpoint scans use the same pipeline: the overview reflects the **latest initial full-page scan** stored on the monitor (checkpoint replaces that baseline when `cy.checkAccessibility()` runs).
+
+Previews are **clipped and isolated** in the report (`contain` / `transform` stacking) and serialized styles **downgrade `position: fixed`/`sticky` and reset `z-index`** so autop-run UI (popovers, drawers) does not paint over the rest of the report.
+
+### Why a row says “Unresolved …”
+
+Snapshot capture must **resolve axe’s `target` selector chain** in the live DOM. Common reasons resolution fails:
+
+- **Cross-origin or tightly sandboxed iframe** — `contentDocument` is not available, so nodes inside the frame cannot be serialized (`unresolved-cross-origin-or-sandboxed-iframe`).
+- **Closed shadow roots** or **selectors that no longer match** after the scan (timing / DOM churn).
+- **Invalid selector segments** in the chain.
+
+Hover or inspect the short message in the report for the machine-readable code (also stored on `visualSnapshot.err` in JSON).
+
+### Configuration (`visualSnapshots`)
+
+Pass options via `cy.setupLiveA11yMonitor({ ... })`, `cy.setupCoreLiveA11yMonitor({ ... })`, or `cy.setLiveA11yAutoSetupOptions({ observerOptions: { visualSnapshots: ... }, ... })`.
+
+All fields are optional; defaults enable snapshots with conservative limits.
+
+| Option | Default | Purpose |
+| --- | --- | --- |
+| `enabled` | `true` | Master switch for capture and HTML mounts. |
+| `maxNodesPerScan` | `48` | Cap axe nodes receiving element snapshots per scan (initial, live, fallback, pre-navigation). |
+| `pageOverview.enabled` | `true` | Capture `body` (or `pageOverview.rootSelector`) after the initial full-page scan. |
+| `pageOverview.maxDepth` | `5` | Max DOM depth for the page overview. |
+| `pageOverview.maxNodes` | `450` | Max nodes serialized for the overview. |
+| `pageOverview.maxTextChars` | `72` | Max characters per text node in the overview. |
+| `pageOverview.rootSelector` | `"body"` | Root element for the overview. |
+| `element.enabled` | `true` | Per-violation element subtree snapshots. |
+| `element.maxDepth` | `8` | Max depth for each affected element (within the contextual subtree). |
+| `element.maxNodes` | `160` | Max nodes per element subtree (includes wrapper context). |
+| `element.maxTextChars` | `120` | Max characters per text node in element previews. |
+| `element.preferSemanticContainer` | `true` | Use `Element.closest(...)` on dialog/drawer/popover/menu/etc. before falling back to ancestors. |
+| `element.maxFallbackAncestorDepth` | `1` | If no semantic container matches, walk up at most this many parents (keeps previews tight). |
+| `element.extraContainerSelectors` | `[]` | Extra selectors merged into the default container list (array or comma-separated string). |
+| `element.containerSelector` | _(built-in list)_ | Full override string for `closest()` when you need app-specific wrappers. |
+| `element.contextAncestorDepth` | _(legacy)_ | Alias for `maxFallbackAncestorDepth` when set. |
+| `styleProps` | built-in list | Computed properties copied into inline `style` (keep small for performance/size). |
+
+Disable entirely:
+
+```js
+cy.setupLiveA11yMonitor({
+  observerOptions: {
+    visualSnapshots: { enabled: false },
+  },
+});
+```
+
+### Performance tradeoffs
+
+Enabling snapshots adds **CPU time proportional to violation count** (bounded by `maxNodesPerScan`) plus **one extra subtree walk** for the page overview after each initial scan. JSON/HTML artifacts grow with preview payload; disabling `pageOverview` or lowering `maxNodesPerScan` / depth limits is the main lever when reports become large.
+
+### Example artifact
+
+See `assets/docs/sample-visual-report.html` for a minimal standalone HTML example with page + node previews.
+
 ## Report naming convention (easy to read)
 
 All generated reports are saved under `cypress/accessibility/` by default and are written as:
@@ -507,6 +583,11 @@ This lets CI users see key accessibility results directly in terminal output wit
 The same computed validation status (`PASS` / `FAIL`) is also persisted into the JSON payload and displayed in the HTML report summary.
 
 ## Change Log
+
+### `1.0.0-beta.3`
+
+- HTML report: DOM visual snapshot lightbox polish (modal contrast, close behavior, selector and page in the header), page overview highlight reliability on the first loaded page, and node-row layout (Help / fix / HTML / scans order with nested “Scans” styling).
+- Monitor: microtask and animation-frame delay before initial page visual capture; when impact filters are configured, page-overview highlights use unfiltered axe output so dashed outlines match all detected nodes while stored results stay filtered.
 
 ### `1.0.0-beta.2`
 

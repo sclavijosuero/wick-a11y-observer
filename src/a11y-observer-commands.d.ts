@@ -1,5 +1,85 @@
 /// <reference types="cypress" />
 
+/** Options for lightweight DOM + computed-style previews in HTML reports (see README). */
+export interface LiveA11yVisualSnapshotsPageOverviewOptions {
+  enabled?: boolean;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxTextChars?: number;
+  rootSelector?: string;
+}
+
+export interface LiveA11yVisualSnapshotsElementOptions {
+  enabled?: boolean;
+  maxDepth?: number;
+  maxNodes?: number;
+  maxTextChars?: number;
+  /** Prefer nearest modal/drawer/popover container via `closest()` before shallow ancestor fallback. */
+  preferSemanticContainer?: boolean;
+  /** When no semantic container matches, climb at most this many parents (default 1). */
+  maxFallbackAncestorDepth?: number;
+  /** Legacy alias for `maxFallbackAncestorDepth`. */
+  contextAncestorDepth?: number;
+  /** Extra selector tokens merged into the default overlay/container selector list. */
+  extraContainerSelectors?: string[] | string;
+  /** Full override for the `Element.closest(selector)` string. */
+  containerSelector?: string;
+}
+
+export interface LiveA11yVisualSnapshotsOptions {
+  enabled?: boolean;
+  maxNodesPerScan?: number;
+  pageOverview?: LiveA11yVisualSnapshotsPageOverviewOptions;
+  element?: LiveA11yVisualSnapshotsElementOptions;
+  /** Computed property names to mirror as inline `style` (keep the list small). */
+  styleProps?: string[];
+}
+
+/** Compact tree nodes produced by the in-browser visual snapshot serializer (`r` on payloads). */
+export type LiveA11yVisualSnapshotTreeNode =
+  | { x: string; t?: undefined; s?: undefined; a?: undefined; c?: undefined; f?: undefined }
+  | {
+      t: string;
+      s?: string;
+      a?: Record<string, string>;
+      c?: LiveA11yVisualSnapshotTreeNode[];
+      /** Rule impact — report viewer draws a dashed outline in the matching severity color. */
+      f?: string;
+      x?: undefined;
+    };
+
+/** Normalized highlight rect on the page overview (`nx`/`ny`/`nw`/`nh` are 0–1 vs overview root). */
+export interface LiveA11yVisualHighlightNorm {
+  i: string;
+  nx: number;
+  ny: number;
+  nw: number;
+  nh: number;
+}
+
+export interface LiveA11yVisualSnapshotPayload {
+  v?: number;
+  kind?: string;
+  err?: string;
+  url?: string;
+  capturedAt?: number;
+  viewport?: { w?: number; h?: number };
+  rect?: { x?: number; y?: number; w?: number; h?: number };
+  /** Context-root bounds in the AUT so report previews don’t collapse to 0×0 (drawers/modals with only out-of-flow layout). */
+  contextLayout?: { w?: number; h?: number };
+  visibleHint?: boolean;
+  truncated?: boolean;
+  r?: LiveA11yVisualSnapshotTreeNode | null;
+  hl?: LiveA11yVisualHighlightNorm[];
+  [key: string]: unknown;
+}
+
+/** One persisted initial-scan page overview (may repeat across navigations in one test). */
+export type LiveA11yInitialPageVisualEntry = LiveA11yVisualSnapshotPayload & {
+  pageUrl?: string;
+  scanOrdinal?: number;
+};
+
 export interface LiveA11yRunOptions {
   resultTypes?: Array<"violations" | "passes" | "incomplete" | "inapplicable">;
   iframes?: boolean;
@@ -46,6 +126,7 @@ export interface LiveA11yMonitorOptions {
   };
   initialAxeOptions?: LiveA11yRunOptions;
   liveAxeOptions?: LiveA11yRunOptions;
+  visualSnapshots?: LiveA11yVisualSnapshotsOptions;
   [option: string]: unknown;
 }
 
@@ -58,6 +139,8 @@ export interface SetupLiveA11yMonitorOptions {
   initialAxeOptions?: LiveA11yRunOptions;
   liveAxeOptions?: LiveA11yRunOptions;
   observerOptions?: LiveA11yObserverOptions;
+  /** Shorthand for `observerOptions.visualSnapshots` (wins over nested duplicate when both set). */
+  visualSnapshots?: LiveA11yVisualSnapshotsOptions;
   includeIncompleteInReport?: boolean;
   generateReports?: boolean;
   runAccessibility?: boolean;
@@ -106,6 +189,8 @@ export interface ReportLiveA11yResultsOptions {
 export interface LiveA11yStore {
   initial: unknown | null;
   initialPageUrl?: string;
+  initialPageVisual?: LiveA11yVisualSnapshotPayload | null;
+  initialPageVisuals?: LiveA11yInitialPageVisualEntry[];
   live: LiveA11yScan[];
   errors: unknown[];
   meta: {
@@ -154,12 +239,15 @@ export interface LiveA11yNode {
   any?: unknown[];
   all?: unknown[];
   none?: unknown[];
+  visualSnapshot?: LiveA11yVisualSnapshotPayload;
   [key: string]: unknown;
 }
 
 export interface LiveA11yReport {
   generatedAt: string;
   meta: LiveA11yStore["meta"];
+  initialPageVisual?: LiveA11yVisualSnapshotPayload | null;
+  initialPageVisuals?: LiveA11yInitialPageVisualEntry[];
   errors: unknown[];
   counts: {
     initialScans: number;
@@ -277,6 +365,7 @@ export interface LiveA11yGroupedNode {
   liveDetections: number;
   repeatedFromEarlierReport?: boolean;
   firstReportId?: string | null;
+  visualSnapshot?: LiveA11yVisualSnapshotPayload;
   [key: string]: unknown;
 }
 
