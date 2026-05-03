@@ -102,10 +102,9 @@ const toPerTestTrackingKey = (testTitle) => `${currentSpecKey()}::${String(testT
 
 // -----------------------------------------------------------------------------
 // Report filenames, paths, reportId, and metadata
-// What: Builds default output paths under the accessibility folder, stable sortable timestamps,
-//       spec stems, test ordinals, checkpoint labels, and a structured reportMeta object.
-// Why: Artifacts must be unique per run/emission, safe on Windows, sortable in CI artifacts,
-//      and rich enough for HTML/JSON consumers without re-parsing the spec path.
+// What: Builds default paths under the accessibility folder: mode prefix, sanitized test title,
+//       sortable local timestamp, suite ordinal Txx, optional checkpoint label; plus reportMeta.
+// Why: Unique per emission, Windows-safe, sortable in CI, and filenames identify the test title.
 // -----------------------------------------------------------------------------
 /**
  * @param {string} p
@@ -158,8 +157,8 @@ const resolveAccessibilityResultsFolder = () => {
   return DEFAULT_ACCESSIBILITY_RESULTS_FOLDER;
 };
 
-const buildDefaultLiveA11yReportFileName = (sortableLocal, testNumberPadded) =>
-  `a11y-live-auto--${sortableLocal}--T${testNumberPadded}.json`;
+const buildDefaultLiveA11yReportFileName = (testTitleSlug, sortableLocal, testNumberPadded) =>
+  `a11y-live-auto--${testTitleSlug}--${sortableLocal}--T${testNumberPadded}.json`;
 
 const sanitizeCheckpointLabel = (label) => {
   const normalized = String(label || '').trim().replace(/^checkpoint[-_\s]*/i, '');
@@ -168,18 +167,18 @@ const sanitizeCheckpointLabel = (label) => {
 };
 
 const buildDefaultCheckpointA11yReportFileName = (
+  testTitleSlug,
   sortableLocal,
   testNumberPadded,
   checkpointLabel
 ) =>
   checkpointLabel
-    ? `a11y-checkpoint--${sortableLocal}--T${testNumberPadded}-checkpoint-${checkpointLabel}.json`
-    : `a11y-checkpoint--${sortableLocal}--T${testNumberPadded}.json`;
+    ? `a11y-checkpoint--${testTitleSlug}--${sortableLocal}--T${testNumberPadded}-checkpoint-${checkpointLabel}.json`
+    : `a11y-checkpoint--${testTitleSlug}--${sortableLocal}--T${testNumberPadded}.json`;
 
 /**
- * Default live-axe JSON path and report metadata. Uses the current spec file stem, sortable
- * local timestamp, per-spec emission number, and current test title (for unique ID when a file
- * emits more than one report per run).
+ * Default JSON path and report metadata: spec stem, sanitized test title in filename/reportId,
+ * sortable timestamp, suite ordinal (Txx), emission counter, checkpoint label when applicable.
  * @param {string | undefined} outputPathOverride
  * @param {{ checkpointLabel?: string, scanType?: "live" | "checkpoint" }} [namingOptions]
  * @returns {{ outputPath: string, reportMeta: Record<string, string | number | undefined> }}
@@ -193,13 +192,16 @@ const buildLiveA11yOutputPathAndMeta = (outputPathOverride, namingOptions = {}) 
   const sortableLocal = formatSortableLocalTimestamp(d);
   const emission = getAndIncrementSpecReportEmission();
   const testTitle = getCurrentTestTitleForMeta();
-  const testTitleSlug = sanitizeSpecStemForFilename(
-    testTitle
-      .replace(/[^a-zA-Z0-9._\s-]+/g, '_')
-      .replace(/\s+/g, '_')
-      .replace(/_+/g, '_')
-      .slice(0, 64)
-  );
+  const trimmedTestTitle = String(testTitle || '').trim();
+  const testTitleSlug = trimmedTestTitle
+    ? sanitizeSpecStemForFilename(
+      trimmedTestTitle
+        .replace(/[^a-zA-Z0-9._\s-]+/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/_+/g, '_')
+        .slice(0, 64)
+    ) || 'unknown-test'
+    : 'unknown-test';
   const suiteOrd = getTestOrdinalInCurrentMochaSuite();
   const scanType = normalizeScanType(namingOptions?.scanType);
   const checkpointLabel = namingOptions?.checkpointLabel;
@@ -210,16 +212,16 @@ const buildLiveA11yOutputPathAndMeta = (outputPathOverride, namingOptions = {}) 
     ? sanitizeCheckpointLabel(checkpointLabel)
     : undefined;
   const isCheckpointScanReport = scanType === 'checkpoint';
-  // Filename + reportId pattern: continuous live scans vs checkpoint scans (extra checkpoint segment).
-  // Default live id + filename: a11y-live-auto--<ts>--T01
-  // Checkpoint scan id + filename: a11y-checkpoint--<ts>--T01-checkpoint-A
+  // Filename + reportId: mode prefix -- sanitized test title -- timestamp -- Txx [-checkpoint-LABEL].
   const defaultReportFileName = isCheckpointScanReport
     ? buildDefaultCheckpointA11yReportFileName(
+      testTitleSlug,
       sortableLocal,
       testNumberInSpecPadded,
       sanitizedCheckpointLabel
     )
     : buildDefaultLiveA11yReportFileName(
+      testTitleSlug,
       sortableLocal,
       testNumberInSpecPadded
     );
@@ -227,9 +229,9 @@ const buildLiveA11yOutputPathAndMeta = (outputPathOverride, namingOptions = {}) 
   const defaultPath = `${accessibilityResultsFolder}/${defaultReportFileName}`;
   const reportId = isCheckpointScanReport
     ? (sanitizedCheckpointLabel
-      ? `a11y-checkpoint--${sortableLocal}--T${testNumberInSpecPadded}-checkpoint-${sanitizedCheckpointLabel}`
-      : `a11y-checkpoint--${sortableLocal}--T${testNumberInSpecPadded}`)
-    : `a11y-live-auto--${sortableLocal}--T${testNumberInSpecPadded}`;
+      ? `a11y-checkpoint--${testTitleSlug}--${sortableLocal}--T${testNumberInSpecPadded}-checkpoint-${sanitizedCheckpointLabel}`
+      : `a11y-checkpoint--${testTitleSlug}--${sortableLocal}--T${testNumberInSpecPadded}`)
+    : `a11y-live-auto--${testTitleSlug}--${sortableLocal}--T${testNumberInSpecPadded}`;
   const testOrdinalLabel =
     suiteOrd != null ? `Test ${suiteOrd.index} of ${suiteOrd.total} in current suite` : undefined;
   // Structured metadata travels into JSON/HTML (identity rows, dedupe, checkpoint labels).

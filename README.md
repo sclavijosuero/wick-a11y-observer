@@ -40,7 +40,6 @@
   - [Why a row says “Unresolved …”](#why-a-row-says-unresolved)
   - [Configuration (`visualSnapshots`)](#configuration-visualsnapshots)
   - [Performance tradeoffs](#performance-tradeoffs)
-  - [Example artifact](#example-artifact)
 - [Report naming convention (easy to read)](#report-naming-convention-easy-to-read)
   - [1) Live auto lifecycle reports](#1-live-auto-lifecycle-reports)
   - [2) Checkpoint reports](#2-checkpoint-reports)
@@ -714,13 +713,17 @@ Grouped cards: **unique node(s)** = distinct DOM targets (selector + page) for t
 
 ### HTML layout (overview)
 
-Open the **`.html`** in any browser (no Cypress).
+Open the **`.html`** in any browser (no Cypress). Top sections match **`report.summary`** in JSON (identity, analysis mirror, technical metrics).
 
-1. **Header** — Title, **`reportId`**, test name, time, validation badge, **scan mode** (live vs checkpoint), key metrics.
-2. **Analysis options** — Effective axe configuration stored on the report (tags, impacts, rules).
-3. **Findings by severity** — Rule **cards**: impact badge, axe help links, **unique node(s)**, table of selector / optional visual thumbnail / help & HTML & scan context.
-4. **Incomplete** (optional) — When **`includeIncompleteInReport`** is enabled, axe **`incomplete`** items appear in their own subsection with **manual review** labeling; disposition reflects your impact policy.
-5. **Foot / disclaimers** — Static disclaimer text; optional **page-overview** visuals live near the end (see **Visual snapshots**).
+1. **Title & intro** — Document heading and short subtitle (“violations and optional incomplete…”).
+2. **Report identity** — Validation status badge (**PASS** / **FAIL** / …) and a table: **`reportId`**, spec file, Cypress test title, **test in suite**, local generation time, JSON path (and related identity fields from the reporter).
+3. **Analysis options** — Effective axe policy for this artifact: **scan mode** (live vs checkpoint), **rule tags**, impacts that **fail** vs **warn only**, whether **incomplete** is included in the report body.
+4. **Technical metrics** — **Technical Metrics** heading with a grid of scan/run statistics (for example initial vs live scans, violation counts, dropped scans, monitor errors, duplicated findings vs earlier reports in the spec). The first rows stay visible; additional rows sit behind **Show more technical metrics**. Each metric is a **`<details>`** cell—expand for a plain-language description and related metrics (same data as **`summary.technicalMetrics`** / **`metricHelp`** in JSON when present).
+5. **Jump to page overview (optional)** — When visual snapshots are enabled and a full-page overview is available, a **Go to page visual overview (at end of report)** link appears **above** the severity blocks so you can skip straight to the snapshot section (anchors **`#page-visual-full`**, **`#page-visual-full-1`**, … — see **Visual snapshots**).
+6. **Findings by severity** — **By severity** heading, severity **pills** (deep-link into sections), then rule **cards**: impact badge, axe help links, **unique node(s)**, table of selector / optional **Visual snapshot** thumbnail / help, HTML, and scan context.
+7. **Incomplete** (optional) — When **`includeIncompleteInReport`** is enabled, **incomplete** items appear inside the severity layout with **manual review** labeling; disposition follows your impact policy.
+8. **Page visual overview** — Near the **end of `<main>`** (before the short footer): one **Page visual overview** block per stored initial full-page scan (URL line + serialized DOM preview with dashed highlights — **not** a Cypress screenshot). Checkpoint reports only carry overviews from that checkpoint’s scan. Full detail: **[Visual snapshots in HTML reports](#visual-snapshots-in-html-reports)**.
+9. **Footer** — Brief “generated for review” note plus static disclaimer text.
 
 ### Incomplete findings
 
@@ -754,7 +757,7 @@ Snapshot capture must **resolve axe’s `target` selector chain** in the live DO
 
 Hover or inspect the short message in the report for the machine-readable code (also stored on `visualSnapshot.err` in JSON).
 
-### Configuration (`visualSnapshots`)
+### Configuration (`visualSnapshots`) - only for advance configuration
 
 Pass options via `cy.setupLiveA11yMonitor({ ... })`, `cy.setupCoreLiveA11yMonitor({ ... })`, or `cy.setLiveA11yAutoSetupOptions({ observerOptions: { visualSnapshots: ... }, ... })`.
 
@@ -794,10 +797,6 @@ cy.setupLiveA11yMonitor({
 
 Enabling snapshots adds **CPU time proportional to violation count** (bounded by `maxNodesPerScan`) plus **one extra subtree walk** for the page overview after each initial scan. JSON/HTML artifacts grow with preview payload; disabling `pageOverview` or lowering `maxNodesPerScan` / depth limits is the main lever when reports become large.
 
-### Example artifact
-
-See `assets/docs/sample-visual-report.html` for a minimal standalone HTML example with page + node previews.
-
 ## Report naming convention (easy to read)
 
 All generated reports are saved under `cypress/accessibility/` by default and are written as:
@@ -809,50 +808,56 @@ All generated reports are saved under `cypress/accessibility/` by default and ar
 - one `.html` file (human-readable report UI),
 - both sharing the same base name.
 
+Default base names include a **sanitized test title** segment so CI/CD artifact lists and downloads are easier to match to the **`it(...)`** that produced them. The same segments appear in **`reportId`** inside JSON/HTML (without the `.json` extension).
+
 ### 1) Live auto lifecycle reports
 
 Pattern:
 
-`a11y-live-auto--<timestamp>--T<test-number>.json`
+`a11y-live-auto--<test-title-slug>--<timestamp>--T<test-number>.json`
 
 Example:
 
-`a11y-live-auto--2026-04-27_00-26-34_467--T01.json`
+`a11y-live-auto--Login_flow--2026-04-27_00-26-34_467--T01.json`
 
 ### 2) Checkpoint reports
 
-Default pattern (**`checkpointLabel` omitted** → sequential **`A`**, **`B`**, … per test title in the spec):
+Pattern (**`checkpointLabel` omitted** → sequential **`A`**, **`B`**, … for that test):
 
-`a11y-checkpoint--<timestamp>--T<test-number>-checkpoint-<LABEL>.json`
+`a11y-checkpoint--<test-title-slug>--<timestamp>--T<test-number>-checkpoint-<LABEL>.json`
 
 Example (first checkpoint in that test → **`A`**):
 
-`a11y-checkpoint--2026-04-27_00-26-45_458--T06-checkpoint-A.json`
+`a11y-checkpoint--Modal_dialog--2026-04-27_00-26-45_458--T06-checkpoint-A.json`
 
-Pattern (**non-empty string** `checkpointLabel` → fixed suffix):
+Pattern (**non-empty string** `checkpointLabel` → fixed suffix; same shape):
 
-`a11y-checkpoint--<timestamp>--T<test-number>-checkpoint-<LABEL>.json`
+`a11y-checkpoint--<test-title-slug>--<timestamp>--T<test-number>-checkpoint-<LABEL>.json`
 
 Example (custom label):
 
-`a11y-checkpoint--2026-04-27_00-26-47_494--T07-checkpoint-RELEASE_CANDIDATE_V2.json`
+`a11y-checkpoint--Release_gate--2026-04-27_00-26-47_494--T07-checkpoint-RELEASE_CANDIDATE_V2.json`
 
 ### 3) How to decode each part
 
-- `a11y-live-auto` / `a11y-checkpoint`: scan mode that produced the artifact.
-- `<timestamp>`: local sortable timestamp in `YYYY-MM-DD_HH-mm-ss_mmm` format.
-  - `YYYY-MM-DD`: local date.
-  - `HH-mm-ss`: local 24-hour time.
-  - `mmm`: milliseconds.
-- `T<test-number>`: test execution order within the current test file/spec (zero-padded, for example `T01`, `T07`).
-- `-checkpoint-<LABEL>`: suffix for checkpoint reports (checkpoint scan mode — omitted on live artifacts).
-  - Resolved from **`cy.checkAccessibility(..., { checkpointLabel })`**, **`cy.checkAccessibility(..., { report: { checkpointLabel } })`**, **`cy.reportLiveA11yResults({ checkpointLabel })`**, or **`cy.setLiveA11yAutoReportOptions({ checkpointLabel })`** (merged into the next emission), **only when the active store is a checkpoint scan**.
-  - **String** → fixed label; **omitted** (or **`true`** / **`"auto"`**) → sequential **`A`**, **`B`**, … per test title within the spec.
+Segments are separated by **`--`** (double hyphen).
+
+- **`a11y-live-auto`** / **`a11y-checkpoint`**: scan mode that produced the artifact (live auto lifecycle vs checkpoint emission).
+- **`<test-title-slug>`**: filesystem-safe form of the current **`it`** title — characters outside **`[a-zA-Z0-9._-]`** become underscores, runs of underscores collapse, leading/trailing underscores trimmed, then capped at **64** characters. If the title is missing or sanitizes to nothing, **`unknown-test`** is used. (Same value as **`testTitleForFilename`** / **`reportArtifact`** metadata in the JSON.)
+- **`<timestamp>`**: local sortable timestamp in **`YYYY-MM-DD_HH-mm-ss_mmm`** format.
+  - **`YYYY-MM-DD`**: local date.
+  - **`HH-mm-ss`**: local 24-hour time.
+  - **`mmm`**: milliseconds (3 digits).
+- **`T<test-number>`**: test execution order within the **current suite block** when Cypress exposes it (zero-padded, e.g. **`T01`**, **`T07`**); otherwise a per-spec emission counter so names stay unique.
+- **`-checkpoint-<LABEL>`**: checkpoint reports only — uppercase label in the filename (e.g. **`A`**, **`B`**, or your fixed string).
+  - Resolved from **`cy.checkAccessibility(..., { checkpointLabel })`**, **`cy.checkAccessibility(..., { report: { checkpointLabel } })`**, **`cy.reportLiveA11yResults({ checkpointLabel })`**, or **`cy.setLiveA11yAutoReportOptions({ checkpointLabel })`**, **only when the active store is a checkpoint scan**.
+  - **String** → fixed label; **omitted** (or **`true`** / **`"auto"`**) → sequential **`A`**, **`B`**, … per **`it`** title within the spec.
 
 ### 4) Important notes
 
-- `Txx` is per test execution order within the test file/spec and helps map a report back to the test position in that spec.
-- If you pass `outputPath` explicitly in `cy.reportLiveA11yResults(...)`, `cy.checkAccessibility(..., { report: { outputPath } })`, or `cy.setLiveA11yAutoReportOptions(...)`, that custom path/name is used instead of the default naming convention above.
+- **`Txx`** complements the title slug: the slug identifies *which test*, the ordinal identifies *which position* in the suite when available.
+- **`reportId`** mirrors the default base name (no **`.json`** / **`.html`**): same **`a11y-…--<test-title-slug>--<timestamp>--Txx`** parts and optional **`-checkpoint-<LABEL>`**.
+- If you pass **`outputPath`** explicitly in **`cy.reportLiveA11yResults(...)`**, **`cy.checkAccessibility(..., { report: { outputPath } })`**, or **`cy.setLiveA11yAutoReportOptions(...)`**, that custom path/name is used instead of the default naming convention above.
 
 ## Terminal output (CI-friendly)
 
@@ -872,12 +877,21 @@ The same computed validation status (`PASS` / `FAIL`) is also persisted into the
 
 ## Change Log
 
+<a id="changelog-100-beta4"></a>
+
+### `1.0.0-beta.4`
+
+- **Artifacts:** default report base names and **`reportId`** include a sanitized **test title** segment so CI/CD downloads match the **`it`** that emitted them (update glob patterns if you relied on the old shape).
+- **Checkpoints:** **`checkpointLabel`** omitted → sequential **`A`**, **`B`**, … per test; optional label ignored when the store is a **live** report (naming follows **`scanType`** from the monitor).
+- **`LIVE_A11Y_RUN` off:** skips **`cy.checkAccessibility`** (no checkpoint scan/report), same skip signal as the live monitor path.
+- **Docs:** env / **`cy.visit`** behavior, Shared Option Types cross-links, **`SetupLiveA11yMonitorOptions`** field notes, HTML layout (**Technical metrics**, **Page visual overview**).
+
 <a id="changelog-100-beta3"></a>
 
 ### `1.0.0-beta.3`
 
 - **`cy.checkAccessibility`**: by default chains **`cy.reportLiveA11yResults`** after the checkpoint scan (`emitReport: true`), merges checkpoint-friendly validation and **`suppressEndOfTestAutoReport`** so the auto **`afterEach`** does not duplicate artifacts; supports **`checkpointLabel`** (and **`report`**) on the second argument; optional **`emitReport: false`** for scan-only / legacy flows.
-- **`checkpointLabel`**: supports **`true`** / **`"auto"`** for sequential **`A`**, **`B`**, … labels (fixed resolver order vs string labels).
+- **`checkpointLabel`**: **`true`** / **`"auto"`** for sequential **`A`**, **`B`**, … labels; string for a fixed suffix.
 - HTML report: DOM visual snapshot lightbox polish (modal contrast, close behavior, selector and page in the header), page overview highlight reliability on the first loaded page, and node-row layout (Help / fix / HTML / scans order with nested “Scans” styling).
 - Monitor: microtask and animation-frame delay before initial page visual capture; when impact filters are configured, page-overview highlights use unfiltered axe output so dashed outlines match all detected nodes while stored results stay filtered.
 
