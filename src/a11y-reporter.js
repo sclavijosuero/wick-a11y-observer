@@ -395,7 +395,7 @@ const toFindingDetails = (results, findingType = "violation") => {
 };
 
 /**
- * Merge findings by rule id + finding type: aggregate occurrence counts, phases, sources,
+ * Merge findings by rule id + finding type: aggregate phases, sources,
  * and collapse duplicate nodes (same target + page). Sort output by severity, then id.
  */
 const groupViolations = (violationDetails) => {
@@ -414,7 +414,6 @@ const groupViolations = (violationDetails) => {
         helpUrl: violation.helpUrl,
         description: violation.description,
         tags: violation.tags || [],
-        totalOccurrences: 1,
         phases: [violation.phase],
         sources: [violation.source],
         sourceLabels: [violation.sourceLabel || violation.source],
@@ -432,8 +431,6 @@ const groupViolations = (violationDetails) => {
       };
       byRule.set(findingKey, existing);
     } else {
-      existing.totalOccurrences += 1;
-
       if (severityRank(violation.impact) < severityRank(existing.impact)) {
         existing.impact = violation.impact || existing.impact;
       }

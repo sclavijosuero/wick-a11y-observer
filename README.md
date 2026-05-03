@@ -1,27 +1,116 @@
 # wick-a11y-observer
 
-`wick-a11y-observer` adds continuous accessibility intelligence to your regular Cypress E2E flow, so you can catch issues while tests already run (without adding manual a11y-only test passes).
+**wick-a11y-observer** runs **[axe-core](https://github.com/dequelabs/axe-core)** in **Cypress**: scans run on each visit and as the DOM changes, with optional **`cy.checkAccessibility()`** checkpoints—no app instrumentation, only support + Node reporter setup.
+
+## Table of contents
+
+- [Features](#features)
+- [Import / Setup](#import--setup)
+- [Public Command Index](#public-command-index)
+- [Shared Option Types](#shared-option-types)
+  - [`LiveA11yRunOptions` (axe-core run options)](#livea11yrunoptions-axe-core-run-options)
+  - [`ReportLiveA11yValidationOptions` (structural validation)](#reportlivea11yvalidationoptions-structural-validation)
+  - [`ReportLiveA11yResultsOptions`](#reportlivea11yresultsoptions)
+  - [`CheckAccessibilityCommandOptions`](#checkaccessibilitycommandoptions)
+  - [`SetupLiveA11yMonitorOptions`](#setuplivea11ymonitoroptions)
+  - [`LiveA11yObserverOptions`](#livea11yobserveroptions)
+  - [`LiveA11yVisualSnapshotsOptions`](#livea11yvisualsnapshotsoptions)
+- [API](#api)
+  - [`cy.checkAccessibility(axeOptions?, commandOptions?)`](#cycheckaccessibilityaxeoptions-commandoptions)
+  - [`cy.setLiveA11yAutoSetupOptions(options?)`](#cysetlivea11yautosetupoptionsoptions)
+  - [`cy.setLiveA11yAutoReportOptions(options?)`](#cysetlivea11yautoreportoptionsoptions)
+  - [`cy.reportLiveA11yResults(options?)`](#cyreportlivea11yresultsoptions)
+- [Auto Lifecycle Notes](#auto-lifecycle-notes)
+  - [Important note about Cypress runner status](#important-note-about-cypress-runner-status)
+  - [Environment Variable Toggles](#env-toggles)
+- [Important Guidance: Do Not Mix Scan Modes](#important-guidance-do-not-mix-scan-modes)
+- [Practical Flow Examples](#practical-flow-examples)
+  - [1) Regular flow: initial + live scans (minimum params, defaults)](#1-regular-flow-initial-live-scans-minimum-params-defaults)
+  - [2) Same flow, but custom impact policy (`includedImpacts` + `onlyWarnImpacts`)](#2-same-flow-but-custom-impact-policy-includedimpacts-onlywarnimpacts)
+  - [3) One-time checkpoint snapshot after UI stabilizes](#3-one-time-checkpoint-snapshot-after-ui-stabilizes)
+  - [4) One-time checkpoint snapshot with custom axe options (`runOnly`, `rules`, impacts)](#4-one-time-checkpoint-snapshot-with-custom-axe-options-runonly-rules-impacts)
+  - [5) Multiple checkpoints in one test (different configs, separate reports)](#5-multiple-checkpoints-in-one-test-different-configs-separate-reports)
+- [Accessibility reports (JSON and HTML)](#accessibility-reports-json-and-html)
+  - [JSON structure (overview)](#json-structure-overview)
+  - [HTML layout (overview)](#html-layout-overview)
+  - [Incomplete findings](#incomplete-findings)
+- [Visual snapshots in HTML reports](#visual-snapshots-in-html-reports)
+  - [How this differs from Cypress screenshots](#how-this-differs-from-cypress-screenshots)
+  - [Where previews appear](#where-previews-appear)
+  - [Why a row says “Unresolved …”](#why-a-row-says-unresolved)
+  - [Configuration (`visualSnapshots`)](#configuration-visualsnapshots)
+  - [Performance tradeoffs](#performance-tradeoffs)
+  - [Example artifact](#example-artifact)
+- [Report naming convention (easy to read)](#report-naming-convention-easy-to-read)
+  - [1) Live auto lifecycle reports](#1-live-auto-lifecycle-reports)
+  - [2) Checkpoint reports](#2-checkpoint-reports)
+  - [3) How to decode each part](#3-how-to-decode-each-part)
+  - [4) Important notes](#4-important-notes)
+- [Terminal output (CI-friendly)](#terminal-output-ci-friendly)
+- [Change Log](#change-log)
+
+---
 
 ## Features
 
-- **No app instrumentation required: run dynamic, on-the-fly accessibility analysis during normal Cypress tests.**
-- **Works across navigations: pages visited during the test flow are analyzed as part of the run lifecycle.**
-- Tracks dynamic UI changes after the initial scan and continues analyzing as the page updates.
-- Supports both live monitoring and explicit checkpoint scanning (`cy.checkAccessibility(...)`) in the same API.
-- Supports multiple checkpoints in one test, with optional custom checkpoint labels when provided.
-- **Detects repeated accessibility findings on the same DOM nodes across tests in the same spec file and highlights first-seen context in reports.**
-- **Optional inclusion of axe `incomplete` findings in reporting.**
-- Accessibility analysis summaries are also surfaced in the Cypress command log for fast, in-run feedback.
-- Selecting a reported finding in the Cypress command log highlights the related element(s) in the Cypress runner for faster visual debugging.
-- CI-friendly terminal output: the Node reporter task prints a summary by severity and a grouped list of violations with affected nodes.
-- Generates paired artifacts (`.json` + `.html`) with scan metadata, impact summaries, and report IDs for traceability.
-- **Optional lightweight visual previews in HTML reports** (serialized DOM + selected computed styles — not Cypress screenshots): initial page overview plus per-node thumbnails, with previews omitted for cross-report repeated findings to save space.
-- Per-test runtime overrides for setup and reporting (`cy.setLiveA11yAutoSetupOptions(...)` and `cy.setLiveA11yAutoReportOptions(...)`).
-- Built-in validation controls (for example included-impact failure, minimum live scans, runtime error checks).
+What it gives you:
+
+✅**Comprehensive Accessibility Analysis: <u>Leverages axe-core®</u> for thorough accessibility checks.**
+
+  ▪️Axe-core® https://github.com/dequelabs/axe-core is a trademark of Deque Systems, Inc. https://www.deque.com/ in the US and other countries.
+
+✅ **<u>No app instrumentation required</u>: run dynamic, on-the-fly accessibility analysis during normal Cypress tests.**
+
+  ▪️Tracks dynamic UI changes after the initial scan and continues analyzing as the page updates.
+
+  ▪️Default auto lifecycle wires `cy.visit()`, scans, idle waits, strict failure handling, and artifacts—no custom hook boilerplate necessary.
+
+✅ **<u>Works across page navigations</u>: pages visited during the test flow are analyzed as part of the run lifecycle.**
+
+  ▪️ Fewer escaped defects — Issues from navigations, dialogs, drawers, async UI, and SPAs surface in the **same E2E runs** that already gate releases, not only on a one-off static scan.
+
+✅ **Supports both <u>live monitoring</u> and explicit <u>checkpoint scanning</u> (`cy.checkAccessibility(...)`) in the same API.**
+
+  ▪️ Also supporting multiple checkpoints in one test; optional **`checkpointLabel`** (**`string`** for a fixed artifact suffix, or omit it for sequential **`A`**, **`B`**, … per test title within the spec — checkpoint mode only; ignored on live reports)
+  
+  ▪️By default emits JSON/HTML after each checkpoint.
+
+✅ **<u>Detects repeated accessibility findings</u> on the same DOM nodes across tests in the same spec file and highlights first-seen context in reports, for faster triage.**
+
+✅ **Control <u>relevant accessibility information vs noise</u>.**
+
+  ▪️ Configure Errors vs Warnings by severity level.
+
+  ▪️ Support of the optional axe-core-parameter **`incomplete`** (to flag issues that needs manual review)
+
+✅ **Accessibility <u>analysis summaries</u> are also surfaced in the <u>Cypress Log</u> for fast, in-run feedback.**
+
+  ▪️ Selecting a reported finding in the Cypress command log highlights the related element(s) in the Cypress runner for faster visual debugging.
+
+✅ **<u>Enhanced reporting</u> of accessibility violations.**
+
+  ▪️ Generates paired artifacts (`.json` + `.html`) with scan metadata, impact summaries, and report IDs for traceability.
+
+  ▪️ Optional lightweight visual previews in HTML reports (**_serialized DOM + selected computed styles — not Cypress screenshots_**): initial page overview plus per-node thumbnails, with previews omitted for cross-report repeated findings to save space.
+
+✅ **<u>CI-friendly</u> terminal output and artifacts**.
+
+   ▪️ The Node reporter task prints a summary by severity and a grouped list of violations with affected nodes.
+
+   ▪️Configure your json and html reports as CI/CD artifacts.
+
+✅ **<u>Configuration per-test</u> tuning**
+
+  ▪️ Call **`cy.setLiveA11yAutoSetupOptions(...)`** early in a test to change how the **monitor** behaves for that test only (axe options for initial/live scans, observer settings, whether the run is active).
+
+  ▪️ Call **`cy.setLiveA11yAutoReportOptions(...)`** to change how the **next report** is built (validation, **`includeIncompleteInReport`**, **`generateReports`**, checkpoint label, etc.). Both are **cleared after each test** so later tests do not inherit them.
+
+✅ **<u>Built-in validation controls</u> (for example included-impact failure, minimum live scans, runtime error checks).**
+
 
 ## Import / Setup
 
-Load the plugin commands in your Cypress support file:
+1. Load the plugin commands in your Cypress support file:
 
 ```js
 // Installed package (recommended for consumers)
@@ -30,11 +119,13 @@ import "wick-a11y-observer";
 
 **This import automatically registers auto lifecycle hooks (no extra call required).**
 
-Register the Node-side reporter task in `cypress.config.js`:
+2. Register the Node-side reporter task in `cypress.config.js`:
 
 ```js
 const { defineConfig } = require("cypress");
-const { registerLiveA11yReporterTasks } = require("wick-a11y-observer/reporter");
+const {
+  registerLiveA11yReporterTasks,
+} = require("wick-a11y-observer/reporter");
 
 module.exports = defineConfig({
   // Override output folder for generated .json/.html accessibility reports
@@ -48,61 +139,236 @@ module.exports = defineConfig({
 });
 ```
 
-When developing this plugin from a local clone, you can require the reporter the same way as in this repository’s `cypress.config.js` (for example `require("./src/a11y-reporter")` relative to the project root).
+3. Enable accessibility analysis
+
+Set the environment variable **`LIVE_A11Y_RUN`** to `true`. By default is disabled.
+
+For example in **`cypress.config.js`** (`env: { LIVE_A11Y_RUN: true }`), **`cypress.env.json`**, or **`npx cypress run --env LIVE_A11Y_RUN=true`**.
 
 ---
 
 ## Public Command Index
 
-Only the following commands are part of the public plugin API:
+Only the following commands are part of the **public** plugin API:
 
 - `cy.checkAccessibility(axeOptions?, commandOptions?)`
-- `cy.runInitialLiveA11yScan(axeOptions?, commandOptions?)`
 - `cy.setLiveA11yAutoSetupOptions(options?)`
 - `cy.setLiveA11yAutoReportOptions(options?)`
+- `cy.reportLiveA11yResults(options?)`
+
+> The plugin import still registers **non-public** Cypress commands (for example **`cy.runInitialLiveA11yScan`** for manual setups, monitor setup, idle waits). Those are **not** part of this public surface, are **not** declared on **`Chainable`** in the published typings, and may change without a semver guarantee.
 
 ---
 
 ## Shared Option Types
 
-### `LiveA11yRunOptions` (axe-core run options)
+| Layer                     | Question it answers                                                                                                                                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Axe**                   | “What accessibility issues are on the page?”                                                                                                                                                            |
+| **Structural validation** | “Is the **report** itself plausible?” — e.g. did we record an initial scan? Enough **live** (DOM-driven) scans? Any monitor errors? Optionally: should “failing” grouped findings also fail validation? |
+
+### `LiveA11yRunOptions` (axe-core run options) - very common
 
 All fields are optional.
 
 - `resultTypes?: ("violations" | "passes" | "incomplete" | "inapplicable")[]`
 - `iframes?: boolean`
 - `includedImpacts?: ("critical" | "serious" | "moderate" | "minor")[]`
+- `onlyWarnImpacts?: ("critical" | "serious" | "moderate" | "minor")[]` — impacts treated as warnings (disposition **warn**) under the plugin’s policy
 - `impactLevels?: ("critical" | "serious" | "moderate" | "minor")[]`
 - `runOnly?: { type?: string; values?: string[] }`
 - `rules?: Record<string, unknown>`
 - additional unknown fields are allowed/passed through
 
-### Default scan profile
+#### Default scan profile
 
 - `resultTypes: ["violations", "incomplete"]`
 - `iframes: true`
 - `includedImpacts: ["critical", "serious"]`
 - `runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"] }`
 
+### `ReportLiveA11yResultsOptions` - common
+
+Used by `cy.setLiveA11yAutoReportOptions(...)`, `cy.reportLiveA11yResults(...)`, and (when `emitReport` is true) the object passed as `checkAccessibility(..., { report: ... })`. Fields are merged with command defaults and auto-lifecycle defaults where applicable.
+
+| Property                       | Meaning                                                                                                                                                                                                                                                                        |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `outputPath?`                  | Custom output path/filename for the JSON report (HTML follows same base name unless configured otherwise on the Node task).                                                                                                                                                    |
+| `checkpointLabel?`             | **`string`**: fixed suffix for checkpoint artifacts (e.g. `"A"` → `-checkpoint-A`). **Omitted** (or empty after trim): sequential labels **`A`**, **`B`**, … per test title within the spec (**checkpoint** scan mode only — values are **ignored** when the active store is a **live** report). **`true`** / **`"auto"`** are equivalent to omitting (sequential labels).                     |
+| `validation?`                  | Structural validation — **[`ReportLiveA11yValidationOptions`](#reportlivea11yvalidationoptions-structural-validation)** (mental model, defaults, examples, field table).                                                                                                                                                     |
+| `throwOnValidationFailure?`    | Default **`true`** for direct `reportLiveA11yResults`; **`false`** for auto `afterEach` and for the default chain after `checkAccessibility`.                                                                                                                                  |
+| `includeIncompleteInReport?`   | When **`true`**, includes axe **`incomplete`** in counts and report body.                                                                                                                                                                                                      |
+| `generateReports?`             | When **`false`**, skips writing JSON/HTML files (logging may still run). After `checkAccessibility`, the default emitted call forces **`true`** unless you override via `report.generateReports` or an explicit `false` in merged runtime options (see merge order below).     |
+| `suppressEndOfTestAutoReport?` | When **`true`**, the auto **`afterEach`** report is skipped for this test. **`checkAccessibility`** sets this on its emitted report so you do not get a duplicate end-of-test artifact. You rarely need to set this yourself unless you call `reportLiveA11yResults` manually. |
+
+### `ReportLiveA11yValidationOptions` (structural validation) - less common
+
+These options control **structural validation**: an extra pass **after** axe runs that inspects the **report object** (counts, scan history, monitor errors, grouped findings). They apply when you pass **`validation`** through **`cy.setLiveA11yAutoReportOptions`**, **`cy.reportLiveA11yResults`**, or the auto **`afterEach`** path (which calls **`reportLiveA11yResults`**).
+
+> Structural validation does **not** change how axe rules run.
+
+#### Defaults: checkpoint vs end-of-test
+
+| Situation                                                      | What most people want                               | Default structural validation                                                                                                                                                                 |
+| -------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`cy.checkAccessibility`** with **`emitReport: true`**        | JSON/HTML for this moment in the test; axe outcomes | **Off** — the command starts merge at **`enabled: false`**. Spec **Tests 5–7** in **`cypress/e2e/live-a11y-auto-lifecycle.cy.js`** follow this; they do **not** pass **`report.validation`**. |
+| **`cy.reportLiveA11yResults`** with no **`validation`** object | Same checks as a normal CLI-friendly summary        | **On** — **`enabled`** defaults to **`true`** with the field defaults in the table below.                                                                                                     |
+| Auto **`afterEach`** live report                               | Confidence the monitor ran end-to-end               | Same as **`reportLiveA11yResults`** merge, unless **`setLiveA11yAutoReportOptions`** overrides it.                                                                                            |
+
+> You still need **`validation: { enabled: false }`** yourself when you call **`cy.reportLiveA11yResults`** directly on **checkpoint-shaped** data (store cleared / few live scans), because that command’s **default** is **`enabled: true`**. You may also need it if **`setLiveA11yAutoReportOptions`** turned validation **on** and you want one emission without it.
+
+#### Examples
+
+**1. Checkpoint only (common)** — structural validation stays off; nothing to add:
+
+```js
+cy.checkAccessibility({
+  includedImpacts: ["critical", "serious"],
+  runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "best-practice"] },
+});
+```
+
+**2. Scan now, report manually (more advance)** — turn structural validation off so lifecycle rules do not fight an empty live queue:
+
+```js
+cy.checkAccessibility(axeOpts, { emitReport: false });
+cy.reportLiveA11yResults({
+  checkpointLabel: "after-modal",
+  validation: { enabled: false },
+});
+```
+
+**3. Structural validation on a checkpoint file (rare)** — opt in and relax live-scan expectations (otherwise **`minLiveScans: 1`** often fails because **`checkAccessibility`** clears **`store.live`** right before the checkpoint scan):
+
+```js
+cy.checkAccessibility(axeOpts, {
+  report: {
+    validation: {
+      enabled: true,
+      minLiveScans: 0,
+      requireInitialScan: true,
+      failOnIncludedImpacts: true, // set false if you only want “report shape” checks, not fail-on-violations
+    },
+  },
+});
+```
+
+**4. End-of-test live test** — usually **no** `validation` block; defaults apply when the auto lifecycle emits **`reportLiveA11yResults`** from **`afterEach`**.
+
+#### Reference: fields
+
+If **`enabled`** is **`false`**, the rest are ignored. If validation runs (**`enabled: true`** or omitted on **`reportLiveA11yResults`** where the merge default is on), missing keys use the defaults here.
+
+| Property                 | Default                                                                   | Meaning (human)                                                                                                                                                                                                                                                               |
+| ------------------------ | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                | **`true`** for **`reportLiveA11yResults`** when you omit **`validation`** | **`false`** = skip every row below. **`checkAccessibility`** chained report starts from **`false`** before merging **`setLiveA11yAutoReportOptions`** / **`report.validation`**.                                                                                              |
+| `requireInitialScan`     | `true`                                                                    | Report must show at least one initial full-page scan.                                                                                                                                                                                                                         |
+| `minLiveScans`           | `1`                                                                       | Report must include at least this many **live** DOM-driven scans. Checkpoint emissions often need **`0`** if you turned **`enabled`** on (see example 3).                                                                                                                     |
+| `requireNoRuntimeErrors` | `true`                                                                    | **`errors`** on the report must be empty (no monitor/runtime faults).                                                                                                                                                                                                         |
+| `minUniqueLiveRuleIds`   | `0`                                                                       | At least this many **different** axe rule IDs among violations from **live** scans only.                                                                                                                                                                                      |
+| `requiredLiveRuleIds`    | `[]`                                                                      | Each ID listed must appear as a violation on at least one **live** scan.                                                                                                                                                                                                      |
+| `minGroupedBySeverity`   | `{}`                                                                      | Per severity, minimum count in **`counts.groupedBySeverity`**; only keys you list are checked.                                                                                                                                                                                |
+| `failOnIncludedImpacts`  | `true`                                                                    | If **`true`**, any grouped finding with disposition **fail** adds a validation error (separate from axe listing issues in JSON/HTML). If **`false`**, those do not add validation errors; HTML summary **PASS/FAIL** may still reflect grouped fails — see terminal vs badge. |
+
+The HTML/JSON summary **status badge** can still show **FAIL** when grouped failing impacts exist; turning structural validation off does not always clear that badge.
+
+### `CheckAccessibilityCommandOptions` - rarely common
+
+Second argument to `cy.checkAccessibility(axeOptions, commandOptions?)`. Unspecified fields use the defaults in the right-hand column.
+
+| Property                | Default                             | Meaning                                                                                                                                                                                                                                            |
+| ----------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `waitForIdleBeforeScan` | `true`                              | Wait for monitor idle before running the checkpoint scan (reduces flaky one-off scans).                                                                                                                                                            |
+| `waitForIdleOptions`    | `{ quietMs: 500, timeoutMs: 8000 }` | Passed to `cy.waitForLiveA11yIdle` when `waitForIdleBeforeScan` is true.                                                                                                                                                                           |
+| `emitReport`            | `true`                              | When **`true`**, runs **`cy.reportLiveA11yResults`** after the scan (checkpoint artifacts + logs). When **`false`**, scan only — call **`reportLiveA11yResults`** yourself if you need files.                                                      |
+| `checkpointLabel`       | _(none)_                            | **Shorthand** for `report.checkpointLabel` when `emitReport` is true. Same rules as **[`ReportLiveA11yResultsOptions`](#reportlivea11yresultsoptions)**: fixed **`string`** suffix, or omit for sequential **`A`**, **`B`**, … Ignored if `report.checkpointLabel` is already set. |
+| `report`                | `{}`                                | Extra options forwarded to **`cy.reportLiveA11yResults`** (same shape as **[`ReportLiveA11yResultsOptions`](#reportlivea11yresultsoptions)**). Wins over overlapping keys from **`cy.setLiveA11yAutoReportOptions`** for that emission.                                             |
+
+**Merge order for the report emitted by `checkAccessibility`**
+
+1. **`cy.setLiveA11yAutoReportOptions`** (this test only).
+2. **`commandOptions.report`** (this call wins on overlaps).
+3. Command defaults: **`generateReports: true`**, **`throwOnValidationFailure: false`**, **`suppressEndOfTestAutoReport: true`**, and **`validation`** starting at **`{ enabled: false }`**, then overlaid by (1) and (2). So you can turn structural validation **on** for one checkpoint via **`report: { validation: { enabled: true, … } }`** — see examples under **[`ReportLiveA11yValidationOptions`](#reportlivea11yvalidationoptions-structural-validation)**.
+
+### `SetupLiveA11yMonitorOptions`
+
+Passed to **`cy.setLiveA11yAutoSetupOptions(...)`**. Combines axe profiles for navigation-driven scans, observer tuning, optional HTML visual previews, and reporting/accessibility toggles for that test.
+
+| Field | Type / notes |
+| ----- | --------------------------------------------- |
+| **`initialAxeOptions`** | **[`LiveA11yRunOptions`](#livea11yrunoptions-axe-core-run-options)** for the **first full-page axe scan** after each navigation. **If you omit it**, the plugin uses the same **[built-in default scan profile](#default-scan-profile)** (tags, impacts, `iframes`, `resultTypes`). If you pass only some fields, those override that baseline; the rest stay default. |
+| **`liveAxeOptions`** | **[`LiveA11yRunOptions`](#livea11yrunoptions-axe-core-run-options)** for **later live scans** when the DOM changes. **If you omit it**, you get that **same built-in default profile**—but merged **separately** from `initialAxeOptions`. Changing one does **not** automatically change the other. |
+| **`observerOptions`** | **[`LiveA11yObserverOptions`](#livea11yobserveroptions)** — queue, idle, fallback scans, etc. |
+| **`visualSnapshots`** | **[`LiveA11yVisualSnapshotsOptions`](#livea11yvisualsnapshotsoptions)** — shorthand for `observerOptions.visualSnapshots` (top-level wins if both are set). |
+| **`includeIncompleteInReport`** | Optional boolean. **`true`** → include axe **`incomplete`** rows in report counts and detail. **`false`** → leave them out of the emitted report body. If you omit it here, **`LIVE_A11Y_INCLUDE_INCOMPLETE`** (env) and **`cy.setLiveA11yAutoReportOptions`** can still apply—see **[Environment Variable Toggles](#env-toggles)**. |
+| **`generateReports`** | Optional boolean. **`false`** → skip writing JSON/HTML files when the auto report path runs (terminal/log output may still appear). **`true`** → allow artifacts. If omitted, env **`LIVE_A11Y_GENERATE_REPORTS`** applies when set; otherwise defaults to **`true`** — see **[Environment Variable Toggles](#env-toggles)**. |
+| **`runAccessibility`** | Optional boolean. **`true`** → run live a11y for this test even if **`LIVE_A11Y_RUN`** is off. **`false`** → skip it (no monitor install from this plugin, **`cy.checkAccessibility`** becomes a no-op, auto **`afterEach`** report skipped)—same idea as turning accessibility off for that test. |
+| **`skipAccessibility`** | Optional boolean. **`true`** → skip live a11y for this test. **`false`** → do not force a skip by this flag alone (env / other options still apply). Inverse wording of **`runAccessibility`**, not a second independent feature. |
+
+> **`runAccessibility` and `skipAccessibility`:** They are **not** meant to be used together on the **same** options object. Pick **one** (or neither and rely on **`LIVE_A11Y_RUN`**). If both keys are set on the **same** object with boolean values, the plugin evaluates **`runAccessibility` first** and **ignores `skipAccessibility` on that object**.
+
+Full shape: **`a11y-observer-commands.d.ts`**.
+
+### `LiveA11yObserverOptions`
+
+DOM monitor behavior (debounce/idle, queue size, fallback full-page scans, selectors, …). Typings are based on **`LiveA11yMonitorOptions`** without the nested **`initialAxeOptions`** / **`liveAxeOptions`** keys — see **`a11y-observer-commands.d.ts`**.
+
+### `LiveA11yVisualSnapshotsOptions`
+
+Lightweight serialized DOM + computed-style previews in HTML reports. Behavior, limits, and tradeoffs: **[Configuration (`visualSnapshots`)](#configuration-visualsnapshots)**.
+
 ---
 
-## `cy.checkAccessibility(axeOptions?, commandOptions?)`
+## API
 
-Runs a one-time checkpoint full-page accessibility scan for the current page.
+### `cy.checkAccessibility(axeOptions?, commandOptions?)`
 
-### Parameters
+Runs a one-time **checkpoint** full-page axe scan on the current page: clears accumulated **live** findings and prior checkpoint **page visuals**, syncs scan policy from `axeOptions`, then runs **`runInitialFullPageScan`**. Does **not** arm extra live monitoring by itself.
 
-- `axeOptions` (optional): `LiveA11yRunOptions`
-  - If omitted, uses monitor's configured `initialAxeOptions`.
-- `commandOptions` (optional):
-  - `waitForIdleBeforeScan?: boolean` (default: `true`)
-  - `waitForIdleOptions?: { quietMs?: number; timeoutMs?: number }` (default: `{ quietMs: 500, timeoutMs: 8000 }`)
+When live a11y is **skipped**—same conditions as **`LIVE_A11Y_RUN=false`** / unset (or **`skipAccessibility: true`**) unless overridden for that test by **`cy.setLiveA11yAutoSetupOptions({ runAccessibility: true })`**—this command **does nothing**: no idle wait, no scan, no report. It resolves to **`null`** and logs **CHECK ACCESSIBILITY SKIPPED** in the Cypress command log.
 
-### Returns
+#### Parameters
 
-- `Chainable<void>`
+- **`axeOptions`** (optional): **[`LiveA11yRunOptions`](#livea11yrunoptions-axe-core-run-options)** — passed to `axe.run` for this scan; omitted → monitor’s configured **`initialAxeOptions`**.
+- **`commandOptions`** (optional): **[`CheckAccessibilityCommandOptions`](#checkaccessibilitycommandoptions)** — field table under **Shared Option Types**.
 
-### Example
+##### `checkpointLabel` (quick reference)
+
+Use a **string** when you want a **fixed** suffix; **omit** the field when you want **automatic** **`A`**, **`B`**, … per test (checkpoint emissions only — live **`afterEach`** reports ignore this option):
+
+```js
+// Fixed label (filename contains -checkpoint-A)
+cy.checkAccessibility(axeOpts, { checkpointLabel: "A" });
+
+// Sequential labels for this test: first checkpoint 1, second 2, … (default when omitted)
+cy.checkAccessibility(axeOpts1);
+cy.checkAccessibility(axeOpts2);
+
+// Same options under report:
+cy.checkAccessibility(axeOpts, { report: { checkpointLabel: "after-login" } });
+```
+
+#### Returns
+
+- When live a11y is **skipped** (**`LIVE_A11Y_RUN`** off / **`skipAccessibility`**, unless **`runAccessibility`** overrides): **`Chainable<null>`** — checkpoint behavior is disabled.
+- When **`emitReport`** is **`false`** (and live a11y is active): **`Chainable<null>`** (scan only).
+- When **`emitReport`** is **`true`** (default) and live a11y is active: **`Chainable<object>`** — the same object **`cy.reportLiveA11yResults`** resolves to (built by the Node task **`liveA11y:buildReport`**). Highlights you can use in a **`cy.then`**:
+
+  | Field                             | Role                                                                                                                               |
+  | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+  | **`savedTo`** / **`savedHtmlTo`** | Paths to the **`.json`** / **`.html`** files when writes ran (`undefined` if skipped).                                             |
+  | **`validation`**                  | **`valid`**, **`errors`**, and a summary **`status`** (**PASS** / **FAIL**) combining structural checks + grouped failing impacts. |
+  | **`counts`**                      | Numbers for initial vs live scans, violations, grouped severity/disposition, optional incomplete tallies.                          |
+  | **`groupedViolations`**           | Per-rule cards with **`nodeDetails`**, **`disposition`** (**fail** / **warn** / **incomplete**), **`uniqueNodeCount`**.            |
+  | **`reportArtifact`**              | **`reportId`**, **`scanType`**, **`checkpointLabel`**, spec/test labels for filenames and traceability.                            |
+  | **`raw`**                         | Monitor store snapshot (initial axe payload, **`live`** scans, **`errors`**, **`meta`** / analysis options).                       |
+  | **`summary`**                     | Identity + technical metrics (mirrors HTML header).                                                                                |
+
+  Full shape: **`LiveA11yReport`** (+ task-added **`savedTo`** / **`savedHtmlTo`**) in **`a11y-observer-commands.d.ts`**. See **[Accessibility reports (JSON and HTML)](#accessibility-reports-json-and-html)**.
+
+#### Examples
+
+**Scan + default report** (waits for idle, writes artifacts unless disabled in `report` / env, suppresses duplicate **`afterEach`** report):
 
 ```js
 cy.checkAccessibility({
@@ -114,91 +380,75 @@ cy.checkAccessibility({
 });
 ```
 
-Use this command for one-time checkpoints. It does not arm additional live monitoring.
-It clears previously captured live entries before running the checkpoint scan, so the checkpoint reflects the current one-time snapshot.
-When `axeOptions` includes impact or `runOnly` overrides, report policy metadata is synced for this test so severity sections reflect that checkpoint configuration.
-
----
-
-## `cy.runInitialLiveA11yScan(axeOptions?, commandOptions?)`
-
-Runs the initial full-page scan and can optionally arm live monitoring.
-
-### Parameters
-
-- `axeOptions` (optional): `LiveA11yRunOptions`
-  - If omitted, uses monitor's configured `initialAxeOptions`.
-- `commandOptions` (optional): `RunInitialLiveA11yScanCommandOptions`
-  - `armAfter?: boolean` (default: `false`)
-  - `armOptions?: { scanCurrent?: boolean }` (default when arming path applies: `{ scanCurrent: false }`)
-
-### Returns
-
-- `Chainable<void>`
-
-### Examples
-
-#### Example 1: Initial scan only (no `armAfter`, no `armOptions`)
+**Scan only** (legacy / custom reporting):
 
 ```js
-cy.runInitialLiveA11yScan({
-  includedImpacts: ["critical", "serious", "moderate", "minor"],
+cy.checkAccessibility(axeOpts, { emitReport: false });
+cy.reportLiveA11yResults({
+  checkpointLabel: "manual",
+  validation: { enabled: false },
 });
 ```
 
-What this does:
+#### Behavior notes
 
-- Runs one initial full-page accessibility scan with the provided `axeOptions`.
-- Does **not** arm the live monitor afterward.
-- No additional DOM-change live scans are started by this command.
-- Use this when you only need a one-time baseline initial scan.
+**Live monitoring**
 
-#### Example 2: Initial scan, then arm live monitoring (`armAfter` + `armOptions`)
+- After **`cy.visit`**, the default auto lifecycle still runs an initial scan and arms the DOM observer (`armAfter: true`). That happens **before** any **`checkAccessibility`** call.
+- The plugin does **not** disable live scans just because you plan a checkpoint later (compare Test 1 vs Test 5 in the sample spec).
+- **`checkAccessibility`** clears prior **live** scan entries on the store, then runs its full-page checkpoint scan. The checkpoint report is based on that step—not on “checkpoint mode” from page load.
+
+**Checkpoint-heavy runs (what you can configure today)**
+
+- **Default npm import** (`import "wick-a11y-observer"`): the package loads **`registerLiveA11yAutoLifecycle()`** once with **built-in defaults**. Every navigation still runs an **initial full-page scan**, then **`armAfter: true`** arms live DOM scans. There is **no env flag** to skip the initial scan or live arming on that path.
+- **Turn off live DOM rescans** (initial scan on navigation **still runs**): the lifecycle API is **`registerLiveA11yAutoLifecycle({ initialScan: { commandOptions: { armAfter: false } } })`**. The stock **`import "wick-a11y-observer"`** already ran **`registerLiveA11yAutoLifecycle()`** with defaults at module load, so npm consumers **cannot** inject this from support/config alone—only a **fork/local patch** that replaces that single registration. Example shape when you control the call site:
 
 ```js
-cy.runInitialLiveA11yScan(
-  {
-    includedImpacts: ["critical", "serious", "moderate", "minor"],
+registerLiveA11yAutoLifecycle({
+  initialScan: {
+    commandOptions: { armAfter: false },
   },
-  {
-    armAfter: true,
-    armOptions: { scanCurrent: false },
-  }
-);
+});
 ```
 
-What this does (detailed):
+- **Skip the navigation initial scan**: **not supported** by current options — the load handler always calls **`runInitialFullPageScan`** before **`armAfter`**.
+- **Practical recommendation for “only care about `checkAccessibility` reports”**: keep the default import; call **`cy.checkAccessibility()`** where it matters (it clears **`store.live`** then runs its own full-page scan and emits JSON/HTML). Use **`emitReport: false`** + manual **`reportLiveA11yResults`** only if you need different timing. Tune **`afterEach`** / **`setLiveA11yAutoReportOptions`** (for example **`validation.minLiveScans`**) if an end-of-test artifact still runs and clashes with checkpoint-shaped data.
 
-- Runs the initial full-page scan first.
-- Because `armAfter: true`, it then arms the monitor so live observation starts.
-- `armOptions.scanCurrent: false` means:
-  - do **not** immediately scan the current DOM again at arm time,
-  - start watching and scanning on subsequent DOM changes only.
-- This avoids an immediate extra scan right after the initial scan and focuses on future UI mutations.
+**Structural validation**
+
+- The default report chained from **`checkAccessibility`** starts with structural validation **off**, then merges **`setLiveA11yAutoReportOptions`** / **`report.validation`**. Details: **[`ReportLiveA11yValidationOptions`](#reportlivea11yvalidationoptions-structural-validation)**.
+- End-of-test reports from auto **`afterEach`** use stricter **`reportLiveA11yResults`** defaults unless you override them.
+
+**Artifacts**
+
+- Unless you set **`report.generateReports: false`** on this call, the default emission writes JSON/HTML even if **`setLiveA11yAutoReportOptions`** had **`generateReports: false`**.
+
+**Report metadata**
+
+- **`axeOptions`** from the checkpoint (impacts, **`runOnly`**, etc.) are stored on the monitor so HTML **Analysis options** match this scan.
 
 ---
 
-## `cy.setLiveA11yAutoSetupOptions(options?)`
+### `cy.setLiveA11yAutoSetupOptions(options?)`
 
 Sets runtime setup/observer options for the auto lifecycle in the current test.
 
-### Parameters
+#### Parameters
 
-- `options` (optional): `SetupLiveA11yMonitorOptions`
-  - `initialAxeOptions?: LiveA11yRunOptions`: axe options used for the initial full-page scan after navigation.
-  - `liveAxeOptions?: LiveA11yRunOptions`: axe options used for follow-up live scans triggered by DOM changes.
-  - `observerOptions?: LiveA11yObserverOptions`: monitor behavior settings (for example queue size, fallback scanning behavior, debounce/idle behavior).
-  - `visualSnapshots?: LiveA11yVisualSnapshotsOptions`: optional lightweight DOM previews for HTML reports (can also be set inside `observerOptions.visualSnapshots`; a top-level value wins over `observerOptions` when both are present).
-  - `includeIncompleteInReport?: boolean`: includes axe `incomplete` results in report counts/details when reports are generated.
-  - `generateReports?: boolean`: enables/disables writing JSON + HTML report artifacts in the auto lifecycle.
-  - `runAccessibility?: boolean`: explicit on/off switch for this test's auto lifecycle (`true` runs it, `false` skips it).
-  - `skipAccessibility?: boolean`: inverse switch of `runAccessibility` (`true` skips, `false` allows running).
+- `options` (optional): **[`SetupLiveA11yMonitorOptions`](#setuplivea11ymonitoroptions)**
+  - `initialAxeOptions?:` **[`LiveA11yRunOptions`](#livea11yrunoptions-axe-core-run-options)** — initial full-page scan after navigation.
+  - `liveAxeOptions?:` **[`LiveA11yRunOptions`](#livea11yrunoptions-axe-core-run-options)** — follow-up live scans triggered by DOM changes.
+  - `observerOptions?:` **[`LiveA11yObserverOptions`](#livea11yobserveroptions)** — monitor behavior (queue size, fallback scanning, debounce/idle, …).
+  - `visualSnapshots?:` **[`LiveA11yVisualSnapshotsOptions`](#livea11yvisualsnapshotsoptions)** — HTML report DOM previews (can also live under `observerOptions.visualSnapshots`; top-level wins when both are set).
+  - `includeIncompleteInReport?: boolean` — see **[`SetupLiveA11yMonitorOptions`](#setuplivea11ymonitoroptions)** table (**`includeIncompleteInReport`** row).
+  - `generateReports?: boolean` — same table (**`generateReports`** row).
+  - `runAccessibility?: boolean` / `skipAccessibility?: boolean` — same table (**`runAccessibility`** / **`skipAccessibility`** rows and the note below the table).
 
-### Returns
+#### Returns
 
 - `Chainable<void>`
 
-### Example
+#### Example
 
 ```js
 cy.setLiveA11yAutoSetupOptions({
@@ -212,27 +462,19 @@ cy.setLiveA11yAutoSetupOptions({
 
 ---
 
-## `cy.setLiveA11yAutoReportOptions(options?)`
+### `cy.setLiveA11yAutoReportOptions(options?)`
 
 Sets runtime report options for the auto lifecycle in the current test.
 
-### Parameters
+#### Parameters
 
-- `options` (optional): `ReportLiveA11yResultsOptions`
-  - `outputPath?: string`: Custom output path/filename for the report artifact.
-  - `checkpointLabel?: string`: Optional label appended as `-checkpoint-<LABEL>` in checkpoint report names.
-    - If provided, that value is used for the label (for example `ANALYSIS_2` becomes `-checkpoint-ANALYSIS_2`).
-    - If omitted, checkpoint reports are still generated without a checkpoint label suffix.
-  - `validation?: ReportLiveA11yValidationOptions`: Overrides report validation behavior for this test.
-  - `throwOnValidationFailure?: boolean`: If `true` (default), throws when validation fails.
-  - `includeIncompleteInReport?: boolean`: If `true`, includes axe `incomplete` results in report output and counters.
-  - `generateReports?: boolean`: If `false`, skips writing JSON/HTML artifacts (summary still logs to Cypress output).
+- `options` (optional): **[`ReportLiveA11yResultsOptions`](#reportlivea11yresultsoptions)** — full field table under **Shared Option Types** (`checkpointLabel`, `validation`, `suppressEndOfTestAutoReport`, etc.).
 
-### Returns
+#### Returns
 
 - `Chainable<void>`
 
-### Example
+#### Example
 
 ```js
 cy.setLiveA11yAutoReportOptions({
@@ -246,30 +488,72 @@ cy.setLiveA11yAutoReportOptions({
 
 ---
 
+### `cy.reportLiveA11yResults(options?)`
+
+Writes the monitor store to JSON/HTML (unless disabled), runs validation, updates strict-mode data, and logs summaries.
+
+- **`cy.checkAccessibility()`** calls this for you when **`emitReport`** is **`true`** (default).
+- Call it yourself for custom timing, extra emissions, or after **`emitReport: false`**.
+- Auto **`afterEach`** calls it when this test did not already emit a report (no **`checkAccessibility`** emission with **`suppressEndOfTestAutoReport`**).
+
+#### Parameters
+
+- `options` (optional): **[`ReportLiveA11yResultsOptions`](#reportlivea11yresultsoptions)** — full field reference is the table under **Shared Option Types**. Highlights:
+  - **`checkpointLabel`**: non-empty **string** for a fixed suffix; **omitted** → sequential **`A`**, **`B`**, … (**checkpoint** mode only; ignored for **live** reports).
+  - **`validation`**: **[`ReportLiveA11yValidationOptions`](#reportlivea11yvalidationoptions-structural-validation)** — structural checks on the built report (defaults differ for **`reportLiveA11yResults`** vs checkpoint emissions; see that section).
+  - **`throwOnValidationFailure`**: default **`true`** here; auto **`afterEach`** and the default chain after **`checkAccessibility`** use **`false`** so failures aggregate at suite level instead of throwing inside the hook.
+  - **`suppressEndOfTestAutoReport`**: skip duplicate **`afterEach`** artifact when you already emitted from **`checkAccessibility`** or explicit checkpoints.
+
+#### Returns
+
+- `Chainable<object>`: Resolves to the report payload (includes `validation`, `counts`, paths, and so on).
+
+#### Example
+
+```js
+cy.reportLiveA11yResults({
+  checkpointLabel: "after-login",
+  validation: {
+    enabled: true,
+    minLiveScans: 0,
+    failOnIncludedImpacts: true,
+  },
+});
+```
+
+---
+
 ## Auto Lifecycle Notes
 
-- Importing `wick-a11y-observer` (or local `src/a11y-observer-commands.js` during repo development) auto-registers lifecycle hooks.
-- Per-test runtime overrides should be set with:
-  - `cy.setLiveA11yAutoSetupOptions(...)`
-  - `cy.setLiveA11yAutoReportOptions(...)`
+- Importing **`wick-a11y-observer`** registers lifecycle hooks (no extra call).
+- Per test, tune behavior with **`cy.setLiveA11yAutoSetupOptions`** / **`cy.setLiveA11yAutoReportOptions`**.
+- Default **`cy.checkAccessibility()`** emits a report and sets **`suppressEndOfTestAutoReport`** so **`afterEach`** does not write a second file for that test.
+- Use **`emitReport: false`** on **`checkAccessibility`** if you only want the scan and will report from **`afterEach`** or **`reportLiveA11yResults`** yourself.
 
 ### Important note about Cypress runner status
 
-In the Cypress command log, individual test commands can still show green check marks even when accessibility violations were found.
+Commands can look **green** in the log even when the plugin recorded a11y failures.
 
-Why this happens:
+- Failures are often finalized in **`afterEach`** / suite **`after`** (strict mode), not on each **`cy.*`** line.
+- You still get JSON/HTML and logs; the run may fail at the end so artifacts stay complete.
 
-- Live a11y validation is evaluated in lifecycle hooks (`afterEach` / final `after` strict-mode check), not as a direct assertion inside each command line.
-- Because of that, Cypress may show command-level steps as successful while the plugin still records accessibility validation failures.
-- At the end of the run, strict mode performs a consolidated failure if one or more tests had live a11y validation failures, so the final failing item often appears on the last test/hook.
+That is intentional.
 
-This behavior is intentional: it allows the full test run to finish and produce complete accessibility artifacts and summaries before failing the run.
+<a id="env-toggles"></a>
 
-### Env Toggles
+### Environment Variable Toggles
 
-- `LIVE_A11Y_RUN=true|false` (default when omitted: `false`)
-- `LIVE_A11Y_GENERATE_REPORTS=true|false` (default when omitted: `true`)
-- `LIVE_A11Y_INCLUDE_INCOMPLETE=true|false` (default when omitted: `false`)
+These variables are read through **`Cypress.env`** / **`cy.env()`**.
+
+| Variable | Purpose | Default | `true` / truthy | `false` / falsy |
+| -------- | ------- | --------- | ---------------- | ---------------- |
+| **`LIVE_A11Y_RUN`** | Master switch for **running** live a11y **and** **`cy.checkAccessibility()`** checkpoints. | **`false`** / omitted (accessibility analysis skipped). | Enables monitor install, live scanning pipeline, and **`cy.checkAccessibility`**. | Disables live a11y and **`cy.checkAccessibility`** scans entirely. Logs **CHECK ACCESSIBILITY SKIPPED** in the Cypress log. |
+| **`LIVE_A11Y_GENERATE_REPORTS`** | Whether to **write** JSON/HTML artifacts (still subject to other report options). | **`true`** (reports **are** written by default). | Write reports when the reporting path runs. | Skip writing files from the reporter path (useful for fast local runs or CI that only needs logs). |
+| **`LIVE_A11Y_INCLUDE_INCOMPLETE`** | Whether axe-core **incomplete** violations findings appear in emitted reports/HTML. | **`false`** (omit incomplete groups by default). | Include axe-core incomplete violations in the outputs. | Omit them from the outputs. |
+
+Per-test **`cy.setLiveA11yAutoSetupOptions`** / **`cy.setLiveA11yAutoReportOptions`** can override **`runAccessibility`**, **`generateReports`**, and **`includeIncompleteInReport`** for that test only (see **Shared Option Types**).
+
+> 👉 **`cy.visit` is overwritten once by the plugin**: it merges an **`onBeforeLoad`** hook so the live monitor can attach **before** your app scripts run. **`LIVE_A11Y_RUN`** (and per-test **`runAccessibility`** / **`skipAccessibility`** on setup options) decides whether that path runs:
 
 ---
 
@@ -294,10 +578,7 @@ it("runs with default initial + live behavior", () => {
 });
 ```
 
-Notes:
-- Requires `LIVE_A11Y_RUN=true` (for example via `cypress.env.json` or CLI `--env LIVE_A11Y_RUN=true`).
-- Uses default monitor/report behavior.
-- Auto lifecycle performs initial scan after navigation, then live scans on changes.
+Notes: needs **`LIVE_A11Y_RUN=true`**; default initial + live scans after **`cy.visit`**.
 
 ### 2) Same flow, but custom impact policy (`includedImpacts` + `onlyWarnImpacts`)
 
@@ -322,9 +603,7 @@ it("runs with custom impact policy for initial + live scans", () => {
 });
 ```
 
-Notes:
-- `runAccessibility` in `cy.setLiveA11yAutoSetupOptions(...)` can force behavior per test (`true` to run, `false` to skip).
-- This per-test option overrides the `LIVE_A11Y_RUN` env variable.
+Notes: **`cy.setLiveA11yAutoSetupOptions({ runAccessibility })`** overrides **`LIVE_A11Y_RUN`** for that test.
 
 ### 3) One-time checkpoint snapshot after UI stabilizes
 
@@ -337,10 +616,7 @@ it("captures a one-time checkpoint after stabilization", () => {
 });
 ```
 
-Notes:
-- Requires `LIVE_A11Y_RUN=true` (for example via `cypress.env.json` or CLI `--env LIVE_A11Y_RUN=true`).
-- This creates a one-time checkpoint at the moment you call it.
-- By default, `checkAccessibility()` waits for monitor idle before running the scan.
+Notes: needs **`LIVE_A11Y_RUN=true`**; waits for idle by default; default **`emitReport`** writes JSON/HTML and skips duplicate **`afterEach`** report for this test.
 
 ### 4) One-time checkpoint snapshot with custom axe options (`runOnly`, `rules`, impacts)
 
@@ -365,21 +641,15 @@ it("captures one-time checkpoint with custom axe configuration", () => {
 });
 ```
 
-Notes:
-- Requires `LIVE_A11Y_RUN=true` (for example via `cypress.env.json` or CLI `--env LIVE_A11Y_RUN=true`).
-- These axe options apply only to this explicit `checkAccessibility(...)` call.
-- `liveAxeOptions` are not used by this one-time command call; they apply to live observer scans.
-- This call does not start additional live monitoring.
+Notes: checkpoint **`axeOptions`** apply only to this call (live scans still use **`liveAxeOptions`** from setup). Default report emission; **`emitReport: false`** for scan-only.
 
 ### 5) Multiple checkpoints in one test (different configs, separate reports)
 
 ```js
 it("captures checkpoint A and B in the same test", () => {
-  // Disable the auto afterEach report artifact for this test because
-  // we will write explicit checkpoint reports ourselves.
+  // Optional per-test report tweaks; checkAccessibility already defaults validation.enabled to false.
   cy.setLiveA11yAutoReportOptions({
-    generateReports: false,
-    validation: { enabled: false },
+    includeIncompleteInReport: true,
   });
 
   cy.visit("/live-a11y-playground");
@@ -389,51 +659,72 @@ it("captures checkpoint A and B in the same test", () => {
   cy.get('[data-cy="reveal-existing-issues"]').click();
   cy.get('[data-cy="existing-issues-panel"]').should("be.visible");
 
-  // Checkpoint A
-  cy.checkAccessibility({
-    iframes: true,
-    includedImpacts: ["critical", "serious"],
-    onlyWarnImpacts: ["moderate", "minor"],
-    runOnly: {
-      type: "tag",
-      values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
+  // Checkpoint A — scan + report in one command
+  cy.checkAccessibility(
+    {
+      iframes: true,
+      includedImpacts: ["critical", "serious"],
+      onlyWarnImpacts: ["moderate", "minor"],
+      runOnly: {
+        type: "tag",
+        values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
+      },
+      rules: { "color-contrast": { enabled: true } },
     },
-    rules: { "color-contrast": { enabled: true } },
-  });
-  cy.reportLiveA11yResults({
-    checkpointLabel: "A",
-    includeIncompleteInReport: true,
-    validation: { enabled: false },
-    throwOnValidationFailure: false,
-  });
+    { checkpointLabel: "A" },
+  );
 
   // Checkpoint B
-  cy.checkAccessibility({
-    iframes: true,
-    includedImpacts: ["critical"],
-    onlyWarnImpacts: ["serious", "moderate"],
-    runOnly: {
-      type: "tag",
-      values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
+  cy.checkAccessibility(
+    {
+      iframes: true,
+      includedImpacts: ["critical"],
+      onlyWarnImpacts: ["serious", "moderate"],
+      runOnly: {
+        type: "tag",
+        values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "best-practice"],
+      },
+      rules: { "color-contrast": { enabled: false } },
     },
-    rules: { "color-contrast": { enabled: false } },
-  });
-  cy.reportLiveA11yResults({
-    checkpointLabel: "B",
-    includeIncompleteInReport: true,
-    validation: { enabled: false },
-    throwOnValidationFailure: false,
-  });
+    { checkpointLabel: "B" },
+  );
 });
 ```
 
-Notes:
-- You must call `cy.reportLiveA11yResults(...)` after each `cy.checkAccessibility(...)` to persist each checkpoint separately.
-- Using `checkpointLabel` generates checkpoint artifact names like `a11y-checkpoint--<timestamp>--T06-checkpoint-A.json` (and matching `.html`), where `T06` is the test number in the spec file.
-- `generateReports: false` in `cy.setLiveA11yAutoReportOptions(...)` avoids an extra auto `afterEach` artifact that would otherwise reflect only the final state.
-- `validation.enabled: false` is important here because default validation assumes auto-lifecycle expectations (for example minimum live scans and fail-on-included-impacts). In a multi-checkpoint comparison test, those defaults can fail the test even when the checkpoint capture itself is correct.
+Notes: two default emissions ⇒ two artifact pairs; **`checkpointLabel`** adds **`-checkpoint-<LABEL>`** to names; **`afterEach`** report suppressed so you do not get a third file. Structural **`validation`** defaults for checkpoints: **[`ReportLiveA11yValidationOptions`](#reportlivea11yvalidationoptions-structural-validation)**.
 
-Analysis options in the HTML report now include a `Scan mode` row so you can quickly tell whether the report came from a live or checkpoint flow.
+## Accessibility reports (JSON and HTML)
+
+Each successful build writes a **matching pair**: **`.json`** (data) + **`.html`** (readable UI), same basename, under **`accessibilityFolder`** (see **Report naming convention**). Skipped when **`generateReports: false`** or the Node task does not write files.
+
+### JSON structure (overview)
+
+The **`.json`** file is the payload returned on **`cy.checkAccessibility`** / **`cy.reportLiveA11yResults`** (TypeScript **`LiveA11yReport`** plus **`savedTo`** / **`savedHtmlTo`**).
+
+| Block                   | Purpose                                                                                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **`reportArtifact`**    | Identity: **`reportId`**, spec/test labels, **`scanType`** (`live` \| `checkpoint`), **`checkpointLabel`**, paths.                                                              |
+| **`counts`**            | Scan tallies, violations vs incomplete, grouped severity and **fail** / **warn** / **incomplete** disposition.                                                                  |
+| **`groupedViolations`** | One entry per axe **rule** (merged across scans): **`uniqueNodeCount`**, **`nodeDetails`** (per-element rows), **`disposition`**, metadata linking back to **`rawViolations`**. |
+| **`raw`**               | Underlying store: latest **initial** axe result, **`live`** scan history, monitor **`errors`**, **`meta`** (URLs, analysis / scan options).                                     |
+| **`validation`**        | Structural validation outcome (**`valid`**, **`errors`**) plus summary **`status`** used with grouped findings.                                                                 |
+| **`summary`**           | Compact header block (identity + technical metrics) shared with HTML/terminal.                                                                                                  |
+
+Grouped cards: **unique node(s)** = distinct DOM targets (selector + page) for that rule; table rows match that count. JSON rows can include **`initialDetections`** / **`liveDetections`** (and related fields) when both phases contributed.
+
+### HTML layout (overview)
+
+Open the **`.html`** in any browser (no Cypress).
+
+1. **Header** — Title, **`reportId`**, test name, time, validation badge, **scan mode** (live vs checkpoint), key metrics.
+2. **Analysis options** — Effective axe configuration stored on the report (tags, impacts, rules).
+3. **Findings by severity** — Rule **cards**: impact badge, axe help links, **unique node(s)**, table of selector / optional visual thumbnail / help & HTML & scan context.
+4. **Incomplete** (optional) — When **`includeIncompleteInReport`** is enabled, axe **`incomplete`** items appear in their own subsection with **manual review** labeling; disposition reflects your impact policy.
+5. **Foot / disclaimers** — Static disclaimer text; optional **page-overview** visuals live near the end (see **Visual snapshots**).
+
+### Incomplete findings
+
+Axe **`incomplete`** means automation could not fully decide pass/fail. They are **excluded** from default reporting unless you opt in (**`LIVE_A11Y_INCLUDE_INCOMPLETE`**, **`setLiveA11yAutoReportOptions`**, or per-emission **`includeIncompleteInReport`**). Treat them as **review queues**, not automatic production blockers unless your policy maps them to **fail**.
 
 ## Visual snapshots in HTML reports
 
@@ -447,13 +738,11 @@ HTML reports can include **approximate visual previews** built from a **small se
 
 ### Where previews appear
 
-- **Initial / checkpoint scan**: **full-page visual overviews** appear **only at the end** of the HTML report (after severity sections). Each time the monitor runs an **initial full-page scan** for a URL (including after navigations), a section is appended with **`#page-visual-full`** for the first page and **`#page-visual-full-1`**, **`#page-visual-full-2`**, … for later pages. Each block shows the **initial scan URL** and **dashed rectangles** for affected elements (normalized by severity; **more severe outlines are drawn last**).
-- **Each grouped violation row**: a **Visual snapshot** column shows a **fitted thumbnail** (full subtree centered/scaled inside the frame). The capture roots at the **nearest modal/drawer/popover-style container** when possible, otherwise **one shallow parent** for minimal context. The failing node has a **dashed outline** in the rule’s impact color. **Click the thumbnail** to open the **full serialized capture** in a dialog.
-- **Repeated findings** (`repeatedFromEarlierReport`): the HTML **omits** the per-node preview and shows a short note so JSON/HTML stay smaller for noisy recurring issues.
+- **Page overview** — End of the HTML: dashed boxes on affected nodes from the **latest stored initial/full-page scan** (checkpoint **`checkAccessibility`** refreshes that baseline). Anchors **`#page-visual-full`**, **`#page-visual-full-1`**, … per URL round.
+- **Per violation row** — Small **Visual snapshot** thumbnail; click opens a dialog with serialized subtree (approximate layout, not **`cy.screenshot`**).
+- **Repeated nodes** — Preview omitted when **`repeatedFromEarlierReport`** (smaller artifacts).
 
-Live scans and checkpoint scans use the same pipeline: the overview reflects the **latest initial full-page scan** stored on the monitor (checkpoint replaces that baseline when `cy.checkAccessibility()` runs).
-
-Previews are **clipped and isolated** in the report (`contain` / `transform` stacking) and serialized styles **downgrade `position: fixed`/`sticky` and reset `z-index`** so autop-run UI (popovers, drawers) does not paint over the rest of the report.
+Previews use **`contain`** clipping and tame **`position: fixed` / `z-index`** so overlays do not cover the report.
 
 ### Why a row says “Unresolved …”
 
@@ -471,25 +760,25 @@ Pass options via `cy.setupLiveA11yMonitor({ ... })`, `cy.setupCoreLiveA11yMonito
 
 All fields are optional; defaults enable snapshots with conservative limits.
 
-| Option | Default | Purpose |
-| --- | --- | --- |
-| `enabled` | `true` | Master switch for capture and HTML mounts. |
-| `maxNodesPerScan` | `48` | Cap axe nodes receiving element snapshots per scan (initial, live, fallback, pre-navigation). |
-| `pageOverview.enabled` | `true` | Capture `body` (or `pageOverview.rootSelector`) after the initial full-page scan. |
-| `pageOverview.maxDepth` | `5` | Max DOM depth for the page overview. |
-| `pageOverview.maxNodes` | `450` | Max nodes serialized for the overview. |
-| `pageOverview.maxTextChars` | `72` | Max characters per text node in the overview. |
-| `pageOverview.rootSelector` | `"body"` | Root element for the overview. |
-| `element.enabled` | `true` | Per-violation element subtree snapshots. |
-| `element.maxDepth` | `8` | Max depth for each affected element (within the contextual subtree). |
-| `element.maxNodes` | `160` | Max nodes per element subtree (includes wrapper context). |
-| `element.maxTextChars` | `120` | Max characters per text node in element previews. |
-| `element.preferSemanticContainer` | `true` | Use `Element.closest(...)` on dialog/drawer/popover/menu/etc. before falling back to ancestors. |
-| `element.maxFallbackAncestorDepth` | `1` | If no semantic container matches, walk up at most this many parents (keeps previews tight). |
-| `element.extraContainerSelectors` | `[]` | Extra selectors merged into the default container list (array or comma-separated string). |
-| `element.containerSelector` | _(built-in list)_ | Full override string for `closest()` when you need app-specific wrappers. |
-| `element.contextAncestorDepth` | _(legacy)_ | Alias for `maxFallbackAncestorDepth` when set. |
-| `styleProps` | built-in list | Computed properties copied into inline `style` (keep small for performance/size). |
+| Option                             | Default           | Purpose                                                                                         |
+| ---------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
+| `enabled`                          | `true`            | Master switch for capture and HTML mounts.                                                      |
+| `maxNodesPerScan`                  | `48`              | Cap axe nodes receiving element snapshots per scan (initial, live, fallback, pre-navigation).   |
+| `pageOverview.enabled`             | `true`            | Capture `body` (or `pageOverview.rootSelector`) after the initial full-page scan.               |
+| `pageOverview.maxDepth`            | `5`               | Max DOM depth for the page overview.                                                            |
+| `pageOverview.maxNodes`            | `450`             | Max nodes serialized for the overview.                                                          |
+| `pageOverview.maxTextChars`        | `72`              | Max characters per text node in the overview.                                                   |
+| `pageOverview.rootSelector`        | `"body"`          | Root element for the overview.                                                                  |
+| `element.enabled`                  | `true`            | Per-violation element subtree snapshots.                                                        |
+| `element.maxDepth`                 | `8`               | Max depth for each affected element (within the contextual subtree).                            |
+| `element.maxNodes`                 | `160`             | Max nodes per element subtree (includes wrapper context).                                       |
+| `element.maxTextChars`             | `120`             | Max characters per text node in element previews.                                               |
+| `element.preferSemanticContainer`  | `true`            | Use `Element.closest(...)` on dialog/drawer/popover/menu/etc. before falling back to ancestors. |
+| `element.maxFallbackAncestorDepth` | `1`               | If no semantic container matches, walk up at most this many parents (keeps previews tight).     |
+| `element.extraContainerSelectors`  | `[]`              | Extra selectors merged into the default container list (array or comma-separated string).       |
+| `element.containerSelector`        | _(built-in list)_ | Full override string for `closest()` when you need app-specific wrappers.                       |
+| `element.contextAncestorDepth`     | _(legacy)_        | Alias for `maxFallbackAncestorDepth` when set.                                                  |
+| `styleProps`                       | built-in list     | Computed properties copied into inline `style` (keep small for performance/size).               |
 
 Disable entirely:
 
@@ -532,22 +821,21 @@ Example:
 
 ### 2) Checkpoint reports
 
-Pattern (when `checkpointLabel` is omitted):
+Default pattern (**`checkpointLabel` omitted** → sequential **`A`**, **`B`**, … per test title in the spec):
 
-`a11y-checkpoint--<timestamp>--T<test-number>.json`
+`a11y-checkpoint--<timestamp>--T<test-number>-checkpoint-<LABEL>.json`
 
-Example (no label):
+Example (first checkpoint in that test → **`A`**):
 
-`a11y-checkpoint--2026-04-27_00-26-45_458--T06.json`
+`a11y-checkpoint--2026-04-27_00-26-45_458--T06-checkpoint-A.json`
 
-Pattern (custom label when `checkpointLabel` is provided):
+Pattern (**non-empty string** `checkpointLabel` → fixed suffix):
 
 `a11y-checkpoint--<timestamp>--T<test-number>-checkpoint-<LABEL>.json`
 
 Example (custom label):
 
 `a11y-checkpoint--2026-04-27_00-26-47_494--T07-checkpoint-RELEASE_CANDIDATE_V2.json`
-
 
 ### 3) How to decode each part
 
@@ -557,18 +845,18 @@ Example (custom label):
   - `HH-mm-ss`: local 24-hour time.
   - `mmm`: milliseconds.
 - `T<test-number>`: test execution order within the current test file/spec (zero-padded, for example `T01`, `T07`).
-- `-checkpoint-<LABEL>`: optional suffix for checkpoint reports.
-  - It appears when `checkpointLabel` is provided in `cy.setLiveA11yAutoReportOptions()` (option `checkpointLabel`) or `cy.reportLiveA11yResults()` (option `checkpointLabel`).
-  - If no `checkpointLabel` is provided, the suffix is omitted.
+- `-checkpoint-<LABEL>`: suffix for checkpoint reports (checkpoint scan mode — omitted on live artifacts).
+  - Resolved from **`cy.checkAccessibility(..., { checkpointLabel })`**, **`cy.checkAccessibility(..., { report: { checkpointLabel } })`**, **`cy.reportLiveA11yResults({ checkpointLabel })`**, or **`cy.setLiveA11yAutoReportOptions({ checkpointLabel })`** (merged into the next emission), **only when the active store is a checkpoint scan**.
+  - **String** → fixed label; **omitted** (or **`true`** / **`"auto"`**) → sequential **`A`**, **`B`**, … per test title within the spec.
 
 ### 4) Important notes
 
 - `Txx` is per test execution order within the test file/spec and helps map a report back to the test position in that spec.
-- If you pass `outputPath` explicitly in `cy.reportLiveA11yResults(...)` or `cy.setLiveA11yAutoReportOptions(...)`, that custom path/name is used instead of the default naming convention above.
+- If you pass `outputPath` explicitly in `cy.reportLiveA11yResults(...)`, `cy.checkAccessibility(..., { report: { outputPath } })`, or `cy.setLiveA11yAutoReportOptions(...)`, that custom path/name is used instead of the default naming convention above.
 
 ## Terminal output (CI-friendly)
 
-When `cy.reportLiveA11yResults(...)` runs, the Node reporter task (`liveA11y:buildReport`) now writes a plain-text accessibility summary to the terminal/CI logs.
+Whenever a report build runs — including after **`cy.checkAccessibility()`** (default **`emitReport`**) or explicit **`cy.reportLiveA11yResults(...)`** — the Node reporter task **`liveA11y:buildReport`** writes a plain-text accessibility summary to the terminal/CI logs.
 
 This output includes:
 
@@ -584,10 +872,16 @@ The same computed validation status (`PASS` / `FAIL`) is also persisted into the
 
 ## Change Log
 
+<a id="changelog-100-beta3"></a>
+
 ### `1.0.0-beta.3`
 
+- **`cy.checkAccessibility`**: by default chains **`cy.reportLiveA11yResults`** after the checkpoint scan (`emitReport: true`), merges checkpoint-friendly validation and **`suppressEndOfTestAutoReport`** so the auto **`afterEach`** does not duplicate artifacts; supports **`checkpointLabel`** (and **`report`**) on the second argument; optional **`emitReport: false`** for scan-only / legacy flows.
+- **`checkpointLabel`**: supports **`true`** / **`"auto"`** for sequential **`A`**, **`B`**, … labels (fixed resolver order vs string labels).
 - HTML report: DOM visual snapshot lightbox polish (modal contrast, close behavior, selector and page in the header), page overview highlight reliability on the first loaded page, and node-row layout (Help / fix / HTML / scans order with nested “Scans” styling).
 - Monitor: microtask and animation-frame delay before initial page visual capture; when impact filters are configured, page-overview highlights use unfiltered axe output so dashed outlines match all detected nodes while stored results stay filtered.
+
+<a id="changelog-100-beta2"></a>
 
 ### `1.0.0-beta.2`
 
@@ -595,11 +889,14 @@ The same computed validation status (`PASS` / `FAIL`) is also persisted into the
 - Improves how violations appear in the Cypress command log and cleans up related logging noise.
 - Refactors the Node reporter and reorganizes project files with clearer inline documentation.
 
+<a id="changelog-100-beta1"></a>
+
 ### `1.0.0-beta.1`
 
 - Fixes first-test live monitor lifecycle reliability across navigation, improves checkpoint log clarity (A/B labeling), and reduces checkpoint-test noise by skipping redundant auto afterEach report logs while preserving strict end-of-suite failure reporting.
 
+<a id="changelog-100-beta0"></a>
+
 ### `1.0.0-beta.0`
 
 - First public beta release: continuous live + checkpoint accessibility scanning for Cypress, including violations, warnings and optional `incomplete` findings, with strict end-of-run validation, rich JSON/HTML reports, and CI-friendly terminal summaries.
-

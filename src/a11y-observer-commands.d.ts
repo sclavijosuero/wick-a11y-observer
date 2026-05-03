@@ -147,18 +147,21 @@ export interface SetupLiveA11yMonitorOptions {
   skipAccessibility?: boolean;
 }
 
-export interface RunInitialLiveA11yScanCommandOptions {
-  armAfter?: boolean;
-  armOptions?: ArmLiveA11yMonitorOptions;
-}
-
 export interface CheckAccessibilityCommandOptions {
   waitForIdleBeforeScan?: boolean;
   waitForIdleOptions?: WaitForLiveA11yIdleOptions;
-}
-
-export interface ArmLiveA11yMonitorOptions {
-  scanCurrent?: boolean;
+  /**
+   * When true (default), chains `cy.reportLiveA11yResults` after the scan so checkpoint tests do not
+   * need a separate report call. Set false to only run the scan (legacy / custom reporting).
+   */
+  emitReport?: boolean;
+  /**
+   * Shorthand for `report.checkpointLabel` when emitting (checkpoint reports).
+   * Omitted → sequential `A`, `B`, … per test title in the spec (same as `true` / `"auto"`).
+   */
+  checkpointLabel?: string | boolean;
+  /** Options forwarded to `cy.reportLiveA11yResults` when `emitReport` is true (wins over runtime auto-report options where overlapping). */
+  report?: ReportLiveA11yResultsOptions;
 }
 
 export interface WaitForLiveA11yIdleOptions {
@@ -166,7 +169,13 @@ export interface WaitForLiveA11yIdleOptions {
   timeoutMs?: number;
 }
 
+/**
+ * Structural checks on the built report (scan counts, monitor errors, optional fail-on-grouped-finds).
+ * See README “ReportLiveA11yValidationOptions”: `enabled` defaults to true for `reportLiveA11yResults`;
+ * `checkAccessibility` merges starting from `enabled: false` unless overridden.
+ */
 export interface ReportLiveA11yValidationOptions {
+  /** When false, skips all validation rules. Default true for `cy.reportLiveA11yResults`; checkpoint emissions from `checkAccessibility` seed false before merges. */
   enabled?: boolean;
   requireInitialScan?: boolean;
   minLiveScans?: number;
@@ -179,11 +188,22 @@ export interface ReportLiveA11yValidationOptions {
 
 export interface ReportLiveA11yResultsOptions {
   outputPath?: string;
-  checkpointLabel?: string;
+  /**
+   * Checkpoint suffix in artifact names (`-checkpoint-<LABEL>`), **checkpoint scan mode only**
+   * (ignored when the active store is a live report).
+   * Non-empty string → fixed label; omitted → sequential `A`, `B`, … per test title in the spec.
+   * `true` / `"auto"` are equivalent to omitting (sequential labels).
+   */
+  checkpointLabel?: string | boolean;
   validation?: ReportLiveA11yValidationOptions;
   throwOnValidationFailure?: boolean;
   includeIncompleteInReport?: boolean;
   generateReports?: boolean;
+  /**
+   * When true, the auto afterEach hook skips emitting another report for this test (used when
+   * `cy.checkAccessibility` already emitted one, or when you emitted explicit checkpoint reports).
+   */
+  suppressEndOfTestAutoReport?: boolean;
 }
 
 export interface LiveA11yStore {
@@ -341,7 +361,6 @@ export interface LiveA11yGroupedViolation {
   helpUrl?: string;
   description?: string;
   tags: string[];
-  totalOccurrences: number;
   phases: string[];
   sources: string[];
   sourceLabels: string[];
@@ -396,30 +415,29 @@ declare global {
   namespace Cypress {
     interface Chainable<Subject = any> {
       /**
-       * Public API: run full-page initial scan and optionally arm live monitor.
-       */
-      runInitialLiveA11yScan(
-        axeOptions?: LiveA11yRunOptions,
-        commandOptions?: RunInitialLiveA11yScanCommandOptions
-      ): Chainable<void>;
-
-      /**
        * Public API: run a one-time checkpoint accessibility scan for the current page.
+       * When live a11y is skipped (`LIVE_A11Y_RUN` false/unset or `skipAccessibility`, unless
+       * `runAccessibility` overrides via `setLiveA11yAutoSetupOptions`), resolves to `null` without scanning.
+       * Otherwise resolves to the report payload when `emitReport` is true (default); when `emitReport`
+       * is false, `null` after the scan only.
        */
       checkAccessibility(
         axeOptions?: LiveA11yRunOptions,
         commandOptions?: CheckAccessibilityCommandOptions
-      ): Chainable<void>;
+      ): Chainable<object | null>;
+
+      /**
+       * Public API: per-test runtime override for setup/observer options.
+       */
+      setLiveA11yAutoSetupOptions(options?: SetupLiveA11yMonitorOptions): Chainable<void>;
 
       /**
        * Public API: per-test runtime override for report options.
        */
       setLiveA11yAutoReportOptions(options?: ReportLiveA11yResultsOptions): Chainable<void>;
 
-      /**
-       * Public API: per-test runtime override for setup/observer options.
-       */
-      setLiveA11yAutoSetupOptions(options?: SetupLiveA11yMonitorOptions): Chainable<void>;
+      /** Public API: build JSON/HTML report, validation, and Cypress log summaries. */
+      reportLiveA11yResults(options?: ReportLiveA11yResultsOptions): Chainable<object>;
     }
   }
 }

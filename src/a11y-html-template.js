@@ -709,7 +709,7 @@ const severitySectionTypeLabel = (severity, groupedBySeverityDisposition = {}, i
   return "VIOLATIONS";
 };
 
-// --- Per-node “initial vs live” scan breakdown (mirrors JSON source labels / occurrence counts) ---
+// --- Per-node “initial vs live” scan breakdown (mirrors JSON source labels / per-source counts) ---
 const INITIAL_SOURCE = "full-page";
 
 /** Pairs counts with the same human labels used in the JSON (`source` + `sourceLabel`). */
@@ -999,8 +999,7 @@ const renderViolationCard = (v) => {
     ${manualReviewNote}
     ${renderA11yRuleReference(v)}
     <p class="meta violation-stats">
-      <strong>${Number(v.uniqueNodeCount || 0)}</strong> unique node(s) ·
-      <strong>${Number(v.totalOccurrences || 0)}</strong> occurrence(s)
+      <strong>${Number(v.uniqueNodeCount || 0)}</strong> unique node(s)
     </p>
     <table class="nodes">
       <thead><tr><th>Selector / target</th><th>Visual snapshot</th><th>Help, fix guidance, HTML, and scans</th></tr></thead>

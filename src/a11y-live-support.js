@@ -397,28 +397,24 @@ const setScanTypeOnStore = (store, scanType = 'live') => {
   };
 };
 
-const resolveScanTypeForReport = (results, checkpointLabel) => {
-  if (checkpointLabel) {
-    return 'checkpoint';
-  }
-  const scanTypeFromMeta = normalizeScanType(results?.meta?.analysis?.scanType);
-  return scanTypeFromMeta;
-};
+/**
+ * Live vs checkpoint artifact naming follows the monitor store (`results.meta.analysis.scanType`).
+ * A checkpoint label option alone must not promote a live store to checkpoint filenames.
+ */
+const resolveScanTypeForReport = (results, _checkpointLabel) =>
+  normalizeScanType(results?.meta?.analysis?.scanType);
 
 const resolveCheckpointLabelForReport = (scanType, checkpointLabel) => {
-  const normalizedCheckpointLabel = typeof checkpointLabel === 'string'
-    ? checkpointLabel.trim()
-    : checkpointLabel;
-  if (normalizedCheckpointLabel) {
-    return normalizedCheckpointLabel;
+  if (scanType !== 'checkpoint') {
+    return undefined;
   }
-  if (
-    scanType === 'checkpoint'
-    && (checkpointLabel === true || normalizedCheckpointLabel === 'auto')
-  ) {
+  if (checkpointLabel === true || checkpointLabel === 'auto') {
     return getAndIncrementAutoCheckpointLabelForCurrentTest();
   }
-  return undefined;
+  if (typeof checkpointLabel === 'string' && checkpointLabel.trim()) {
+    return checkpointLabel.trim();
+  }
+  return getAndIncrementAutoCheckpointLabelForCurrentTest();
 };
 
 const normalizeRunOnly = (baseRunOnly = {}, overrideRunOnly = {}) => ({
@@ -1177,7 +1173,6 @@ const logGroupedViolations = (groupedViolations = [], rawResults = null) => {
         phases: violation.phases,
         sources: violation.sources,
         uniqueNodeCount: violation.uniqueNodeCount,
-        totalOccurrences: violation.totalOccurrences,
         nodes: violation.nodes,
         nodeDetails: violation.nodeDetails,
         highlightedElementsCount: groupElements.length,
@@ -1455,6 +1450,8 @@ let isLiveA11yAutoVisitCommandOverwriteInstalled = false;
 /** Mutated from `a11y-observer-commands.js` for idempotent `registerLiveA11yAutoLifecycle`. */
 export const liveA11yIntegration = {
   autoLifecycleRegistered: false,
+  /** Registration-time `setupOptions` — used with `resolveSkipLiveA11y` in `cy.checkAccessibility`. */
+  autoLifecycleDefaultSetupOptions: undefined,
 };
 const AUTO_LIVE_A11Y_PRE_NAV_FLUSH_SETUP = {
   observerOptions: {

@@ -24,10 +24,9 @@ Cypress.Commands.add('setupLiveA11yMonitor', (monitorOptions = {}) => {
 });
 
 // -----------------------------------------------------------------------------
-// Explicit initial full-page scan (live pipeline)
-// Runs axe once and marks the store as “live” scanning; optionally arms the monitor
-// afterward for ongoing DOM-driven scans. Use when tests control timing outside
-// auto `visit` hooks.
+// Non-public command: explicit initial full-page scan (live pipeline).
+// Auto lifecycle normally runs initial scan + arm on navigation; consumers should use
+// cy.checkAccessibility for checkpoints. Kept for manual monitor setups / backward compatibility.
 // -----------------------------------------------------------------------------
 Cypress.Commands.add(
   'runInitialLiveA11yScan',
@@ -57,13 +56,35 @@ Cypress.Commands.add(
 // -----------------------------------------------------------------------------
 Cypress.Commands.add(
   'checkAccessibility',
-  (
-    axeOptions = undefined,
-    commandOptions = {
+  (axeOptions = undefined, commandOptions = {}) => {
+    const opts = {
       waitForIdleBeforeScan: true,
       waitForIdleOptions: { quietMs: 500, timeoutMs: 8000 },
+      emitReport: true,
+      report: {},
+      ...commandOptions,
+    };
+
+    const registrationDefaults =
+      a11yLive.liveA11yIntegration.autoLifecycleDefaultSetupOptions ?? {};
+    const runtimeSetupOptions = a11yLive.getLiveA11yAutoSetupRuntimeOptions();
+    const shouldSkipLiveA11y = a11yLive.resolveSkipLiveA11y(
+      runtimeSetupOptions,
+      registrationDefaults
+    );
+    if (shouldSkipLiveA11y) {
+      Cypress.log({
+        name: '⏭ CHECK ACCESSIBILITY SKIPPED',
+        message: `Skipping cy.checkAccessibility (${a11yLive.LIVE_A11Y_RUN_ENV_VAR} disables accessibility analysis or accessibility is skipped).`,
+        consoleProps: () => ({
+          envVar: a11yLive.LIVE_A11Y_RUN_ENV_VAR,
+          runtimeSetupOptions,
+          registrationDefaults,
+        }),
+      });
+      return cy.wrap(null, { log: false });
     }
-  ) => {
+
     const runOneTimeScan = () => {
       return cy.window({ log: false }).then(async (win) => {
         if (!win.__liveA11yMonitor) {
@@ -77,15 +98,49 @@ Cypress.Commands.add(
       });
     };
 
-    if (commandOptions?.waitForIdleBeforeScan === false) {
-      return runOneTimeScan();
+    const emitCheckpointReport = () => {
+      if (opts.emitReport === false) {
+        return cy.wrap(null, { log: false });
+      }
+      const runtimeReport = a11yLive.getLiveA11yAutoReportRuntimeOptions();
+      const userReport = opts.report || {};
+      const mergedValidation = {
+        enabled: false,
+        ...(runtimeReport.validation || {}),
+        ...(userReport.validation || {}),
+      };
+      const reportPayload = {
+        ...runtimeReport,
+        ...userReport,
+        generateReports:
+          userReport.generateReports !== undefined ? userReport.generateReports : true,
+        throwOnValidationFailure:
+          userReport.throwOnValidationFailure !== undefined
+            ? userReport.throwOnValidationFailure
+            : false,
+        suppressEndOfTestAutoReport: true,
+        validation: mergedValidation,
+      };
+      if (
+        opts.checkpointLabel != null &&
+        userReport.checkpointLabel === undefined &&
+        reportPayload.checkpointLabel === undefined
+      ) {
+        reportPayload.checkpointLabel = opts.checkpointLabel;
+      }
+      return cy.reportLiveA11yResults(reportPayload);
+    };
+
+    if (opts.waitForIdleBeforeScan === false) {
+      return runOneTimeScan().then(() => emitCheckpointReport());
     }
 
     return cy
       .waitForLiveA11yIdle(
-        commandOptions?.waitForIdleOptions || { quietMs: 500, timeoutMs: 8000 }
+        opts.waitForIdleOptions || { quietMs: 500, timeoutMs: 8000 }
       )
-      .then(() => runOneTimeScan());
+      .then(() => runOneTimeScan())
+      .then(() => emitCheckpointReport());
   }
 );
 
@@ -196,7 +251,7 @@ Cypress.Commands.add('reportLiveA11yResults', (options = {}) => {
       // Checkpoint flags, strict-mode violation aggregates, Command Log + detailed violation lines.
       const reportTestTitle = report?.reportArtifact?.testTitle || a11yLive.getCurrentTestTitleForMeta();
       const perTestTrackingKey = a11yLive.toPerTestTrackingKey(reportTestTitle);
-      if (checkpointLabel) {
+      if (checkpointLabel || options.suppressEndOfTestAutoReport) {
         a11yLive.testsWithExplicitCheckpointReports.add(perTestTrackingKey);
       }
 
@@ -419,6 +474,8 @@ export const registerLiveA11yAutoLifecycle = (options = {}) => {
     failRunOnValidationError = true,
     stopMonitorAfterEach = true,
   } = options;
+
+  a11yLive.liveA11yIntegration.autoLifecycleDefaultSetupOptions = setupOptions;
 
   // When validation fails but we avoid throwing inside `afterEach` (and when deferring to suite strict mode),
   // entries accumulate here so `after` can throw one consolidated error with every failing test.

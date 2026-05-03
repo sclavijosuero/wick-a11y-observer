@@ -324,13 +324,11 @@ describe('live a11y auto lifecycle', () => {
   })
 
   it('Test 7: two-time checkpoint scan with different custom axe options', () => {
-    // Keep this test focused on explicit checkpoints.
-    // Otherwise afterEach emits an additional auto report with only the last state.
+    // Per-test report defaults merged into each checkAccessibility emission (after the command's
+    // checkpoint defaults). Structural validation stays off for those emissions unless you pass
+    // report.validation — checkAccessibility seeds validation.enabled false before this merge.
     cy.setLiveA11yAutoReportOptions({
-      generateReports: false,
-      validation: {
-        enabled: false,
-      },
+      includeIncompleteInReport: true,
     });
 
     cy.visit('/live-axe-monitor-playground.html');
@@ -346,49 +344,38 @@ describe('live a11y auto lifecycle', () => {
     cy.get('[data-cy=open-drawer]').click();
     cy.get('[data-cy="drawer"][data-state="open"]').should('be.visible');
 
-    // Check point A
-    cy.checkAccessibility({
-      iframes: true,
-      includedImpacts: ['critical', 'serious'],
-      onlyWarnImpacts: ['moderate', 'minor'],
-      runOnly: standardsTags,
-      rules: {
-        // Example rule override for this one-time run.
-        'color-contrast': { enabled: true },
+    // Checkpoint A — scan + JSON/HTML report (emitReport default)
+    cy.checkAccessibility(
+      {
+        iframes: true,
+        includedImpacts: ['critical', 'serious'],
+        onlyWarnImpacts: ['moderate', 'minor'],
+        runOnly: standardsTags,
+        rules: {
+          // Example rule override for this one-time run.
+          'color-contrast': { enabled: true },
+        },
       },
-    });
-    cy.reportLiveA11yResults({
-      checkpointLabel: 'A',
-      includeIncompleteInReport: true,
-      validation: {
-        enabled: false,
-      },
-      throwOnValidationFailure: false,
-    });
+      { checkpointLabel: '1' }
+    );
 
     // Between the two checkpoints, there could be other cypress commands and actions like get(), click(), etc.
     cy.get('[data-cy=show-brief]').click();
     cy.get('[data-cy=brief-alert]').should('be.visible');
 
-    // Check point B
-    cy.checkAccessibility({
-      iframes: true,
-      includedImpacts: ['critical'],
-      onlyWarnImpacts: ['serious', 'moderate'],
-      runOnly: standardsTags,
-      rules: {
-        // Example rule override for this one-time run.
-        'color-contrast': { enabled: false },
+    // Checkpoint B
+    cy.checkAccessibility(
+      {
+        iframes: true,
+        includedImpacts: ['critical'],
+        onlyWarnImpacts: ['serious', 'moderate'],
+        runOnly: standardsTags,
+        rules: {
+          // Example rule override for this one-time run.
+          'color-contrast': { enabled: false },
+        },
       },
-
-    });
-    cy.reportLiveA11yResults({
-      checkpointLabel: 'B',
-      includeIncompleteInReport: true,
-      validation: {
-        enabled: false,
-      },
-      throwOnValidationFailure: false,
-    });
+      { checkpointLabel: '2' }
+    );
   });
 });
